@@ -1,8 +1,13 @@
 import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
+import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { v4 as uuidv4 } from 'uuid';
 import { ShortTermMemory } from '../lib/memory';
 import { VectorSearch } from '../lib/vector-search';
 import { ChatRequest, ChatResponse, Message } from '../types';
+
+const bedrockClient = new BedrockRuntimeClient({
+  region: process.env.AWS_REGION || 'us-east-1'
+});
 
 const shortTermMemory = new ShortTermMemory();
 const vectorSearch = new VectorSearch();
@@ -98,33 +103,67 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
 }
 
 /**
- * Generate AI response (placeholder - integrate with your LLM)
+ * Generate AI response using AWS Bedrock (Claude 3.5 Sonnet)
  */
 async function generateResponse(
   history: Message[],
   context: string,
   userMessage: string
 ): Promise<string> {
-  // TODO: Integrate with LLM API (OpenAI, Bedrock, etc.)
-  // For MVP, return a simple echo response
+  try {
+    // Build system prompt
+    const systemPrompt = `You are a helpful personal AI assistant. You have access to the user's knowledge base and conversation history.${context ? '\n\n' + context : ''}`;
 
-  const historyContext = history.length > 0
-    ? `\n\nConversation history:\n${history.map(m => `${m.role}: ${m.content}`).join('\n')}`
-    : '';
+    // Convert history to Claude messages format
+    const messages = history
+      .filter(m => m.role !== 'system')
+      .map(m => ({
+        role: m.role === 'user' ? 'user' : 'assistant',
+        content: m.content,
+      }));
 
-  return `[AI Response Placeholder]
+    // Add current user message
+    messages.push({
+      role: 'user',
+      content: userMessage,
+    });
 
-Your message: "${userMessage}"
-${context}
-${historyContext}
+    // Prepare Bedrock request
+    const requestBody = {
+      anthropic_version: 'bedrock-2023-05-31',
+      max_tokens: 4096,
+      system: systemPrompt,
+      messages: messages,
+      temperature: 0.7,
+      top_p: 0.9,
+    };
 
-TODO: Integrate with LLM API (OpenAI GPT-4, AWS Bedrock, etc.) to generate actual responses.
+    // Invoke Claude via Bedrock
+    const command = new InvokeModelCommand({
+      modelId: 'anthropic.claude-3-5-sonnet-20240620-v1:0',
+      contentType: 'application/json',
+      accept: 'application/json',
+      body: JSON.stringify(requestBody),
+    });
 
-For now, this is a placeholder response showing that:
-1. Your message was received and encrypted
-2. Conversation history is being tracked
-3. Knowledge base search is working (if enabled)
-4. End-to-end encryption is active
+    const response = await bedrockClient.send(command);
+    const responseBody = JSON.parse(new TextDecoder().decode(response.body));
 
-All data is encrypted at rest using KMS envelope encryption.`;
+    // Extract response text
+    if (responseBody.content && responseBody.content.length > 0) {
+      return responseBody.content[0].text;
+    }
+
+    return 'I apologize, but I was unable to generate a response. Please try again.';
+  } catch (error) {
+    console.error('Error calling Bedrock:', error);
+
+    // Fallback response if Bedrock fails
+    return `I encountered an error while processing your request. This might be because:
+1. AWS Bedrock is not enabled in your region
+2. Claude 3.5 Sonnet model access needs to be requested
+3. There's a temporary service issue
+
+Please check your AWS Bedrock settings and try again. Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+  }
 }

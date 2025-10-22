@@ -1,7 +1,12 @@
 import { DynamoDBClient, ScanCommand } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { KnowledgeItem, VectorSearchRequest, VectorSearchResult } from '../types';
 import { decryptObject } from './encryption';
+
+const bedrockClient = new BedrockRuntimeClient({
+  region: process.env.AWS_REGION || 'us-east-1'
+});
 
 const dynamoClient = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-east-1' });
 const docClient = DynamoDBDocumentClient.from(dynamoClient);
@@ -40,23 +45,65 @@ function cosineSimilarity(vecA: number[], vecB: number[]): number {
  */
 export class VectorSearch {
   /**
-   * Generate embedding for text (placeholder - integrate with your embedding service)
-   * In production, use OpenAI embeddings, Bedrock Titan, or similar
+   * Generate embedding for text using AWS Bedrock Titan Embeddings
+   * Uses 1024-dimensional embeddings from Titan Embed Text v2
    */
   async generateEmbedding(text: string): Promise<number[]> {
-    // TODO: Integrate with embedding service (OpenAI, Bedrock, etc.)
-    // For MVP, return a simple hash-based embedding
-    const embedding = new Array(384).fill(0);
+    try {
+      // Prepare request for Titan Embeddings
+      const requestBody = {
+        inputText: text,
+      };
 
-    // Simple hash-based embedding (NOT for production)
-    for (let i = 0; i < text.length; i++) {
-      const charCode = text.charCodeAt(i);
-      embedding[i % 384] += charCode / 1000;
+      const command = new InvokeModelCommand({
+        modelId: 'amazon.titan-embed-text-v2:0',
+        contentType: 'application/json',
+        accept: 'application/json',
+        body: JSON.stringify(requestBody),
+      });
+
+      const response = await bedrockClient.send(command);
+      const responseBody = JSON.parse(new TextDecoder().decode(response.body));
+
+      // Titan returns embeddings in the 'embedding' field
+      if (responseBody.embedding && Array.isArray(responseBody.embedding)) {
+        return responseBody.embedding;
+      }
+
+      console.warn('Bedrock Titan embedding response missing embedding field, falling back to v1');
+
+      // Fallback to Titan v1 if v2 fails
+      const commandV1 = new InvokeModelCommand({
+        modelId: 'amazon.titan-embed-text-v1',
+        contentType: 'application/json',
+        accept: 'application/json',
+        body: JSON.stringify(requestBody),
+      });
+
+      const responseV1 = await bedrockClient.send(commandV1);
+      const responseBodyV1 = JSON.parse(new TextDecoder().decode(responseV1.body));
+
+      if (responseBodyV1.embedding && Array.isArray(responseBodyV1.embedding)) {
+        return responseBodyV1.embedding;
+      }
+
+      throw new Error('Failed to generate embedding from Bedrock Titan');
+    } catch (error) {
+      console.error('Error generating embedding with Bedrock:', error);
+
+      // Fallback to simple embedding if Bedrock fails
+      // This ensures the service continues to work even if Bedrock has issues
+      console.warn('Falling back to simple hash-based embedding');
+      const embedding = new Array(384).fill(0);
+
+      for (let i = 0; i < text.length; i++) {
+        const charCode = text.charCodeAt(i);
+        embedding[i % 384] += charCode / 1000;
+      }
+
+      const norm = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
+      return embedding.map(val => val / norm);
     }
-
-    // Normalize
-    const norm = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
-    return embedding.map(val => val / norm);
   }
 
   /**

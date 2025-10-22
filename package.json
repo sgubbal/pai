@@ -11,6 +11,7 @@
     "deploy:functions": "./scripts/deploy-functions.sh"
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.621.0",
     "@aws-sdk/client-dynamodb": "^3.621.0",
     "@aws-sdk/client-kms": "^3.621.0",
     "@aws-sdk/client-s3": "^3.621.0",

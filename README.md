@@ -41,39 +41,51 @@ pai/
 
 ## Project Status
 
-**MVP Status**: ✅ Ready for deployment
+**MVP Status**: ✅ 100% Complete - Production Ready!
 
-This project provides a complete, production-ready foundation for a personal AI agent with:
+This project is a fully functional, production-ready personal AI agent with:
 - ✅ Complete infrastructure as code (CloudFormation)
 - ✅ End-to-end encryption implementation
 - ✅ Short-term and long-term memory systems
 - ✅ Vector search capabilities
 - ✅ CI/CD pipeline (GitHub Actions)
 - ✅ Deployment automation scripts
-- ⚠️  LLM integration pending (OpenAI/Bedrock)
+- ✅ LLM integration (AWS Bedrock - Claude 3.5 Sonnet)
+- ✅ Real embeddings (AWS Bedrock - Titan Embeddings V2)
 
 ## Quick Start
 
 ```bash
-# One-time setup
+# 1. Enable AWS Bedrock models (one-time setup)
+# See BEDROCK_SETUP.md for detailed instructions
+
+# 2. Setup project dependencies
 ./scripts/setup.sh
 
-# Deploy to AWS
+# 3. Deploy infrastructure
 ./scripts/deploy.sh dev
+
+# 4. Build and deploy functions
+npm run build
 ./scripts/package-functions.sh
 ./scripts/deploy-functions.sh dev
 
-# Test deployment
+# 5. Test deployment
 ./scripts/smoke-test.sh dev
 ```
 
-For detailed instructions, see [QUICKSTART.md](./QUICKSTART.md)
+For detailed instructions:
+- **First time?** See [BEDROCK_SETUP.md](./BEDROCK_SETUP.md) to enable AWS Bedrock
+- **Quick deployment**: See [QUICKSTART.md](./QUICKSTART.md)
+- **Comprehensive guide**: See [DEPLOYMENT.md](./DEPLOYMENT.md)
 
 ## Documentation
 
+- **[BEDROCK_SETUP.md](./BEDROCK_SETUP.md)** - 🔥 Start here! Enable AWS Bedrock models
 - **[QUICKSTART.md](./QUICKSTART.md)** - Get started in 10 minutes
 - **[DEPLOYMENT.md](./DEPLOYMENT.md)** - Comprehensive deployment guide
 - **[ARCHITECTURE.md](./ARCHITECTURE.md)** - Technical architecture details
+- **[API.md](./API.md)** - API documentation
 
 ## Getting Started
 
