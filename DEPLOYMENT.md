@@ -1,242 +1,379 @@
-# PAI Deployment Guide
+# PAI Agent Deployment Guide
+
+Complete guide for deploying the Personal AI Agent to AWS.
 
 ## Prerequisites
 
-1. **AWS Account** with appropriate permissions
-2. **AWS CLI** installed and configured
-3. **Node.js** 20+ installed
-4. **Git** installed
+### Required Tools
 
-## Initial Setup
+1. **AWS CLI** (v2.x or later)
+   ```bash
+   aws --version
+   ```
 
-### 1. Configure AWS Credentials
+2. **Python 3.11+**
+   ```bash
+   python --version
+   ```
+
+3. **Git**
+   ```bash
+   git --version
+   ```
+
+4. **jq** (for JSON parsing in scripts)
+   ```bash
+   jq --version
+   ```
+
+### AWS Account Setup
+
+1. **AWS Account**: You need an AWS account with appropriate permissions
+
+2. **AWS Credentials**: Configure your AWS credentials
+   ```bash
+   aws configure
+   ```
+
+3. **Bedrock Model Access**: Request access to the following models in AWS Bedrock:
+   - Claude 3 Sonnet (`anthropic.claude-3-sonnet-20240229-v1:0`)
+   - Titan Embeddings V2 (`amazon.titan-embed-text-v2:0`)
+
+   To request access:
+   - Go to AWS Console → Amazon Bedrock → Model access
+   - Request access for the required models
+   - Wait for approval (usually instant for most models)
+
+## Installation
+
+### 1. Clone the Repository
 
 ```bash
-aws configure
-```
-
-Or use environment variables:
-```bash
-export AWS_ACCESS_KEY_ID=your_key_id
-export AWS_REGION=us-east-1
-export AWS_SECRET_ACCESS_KEY=your_secret_key
+git clone <your-repo-url>
+cd pai
 ```
 
 ### 2. Install Dependencies
 
 ```bash
-npm install
+# Install Python dependencies
+pip install -r requirements-dev.txt
 ```
 
-### 3. Build the Project
+### 3. Configure Environment
 
 ```bash
-npm run build
+# Copy example environment file
+cp .env.example .env
+
+# Edit .env with your settings
+nano .env
 ```
 
-## Deployment Options
+Required environment variables:
+```bash
+AWS_REGION=us-east-1
+AWS_ACCOUNT_ID=your-account-id
+ENVIRONMENT=dev
+```
 
-### Option 1: Manual Deployment (Recommended for first-time)
+## Deployment Steps
+
+### Option 1: Automated Deployment (Recommended)
+
+```bash
+# Deploy infrastructure
+./scripts/deploy.sh dev
+
+# Package and deploy Lambda functions
+./scripts/package-lambdas.sh dev
+
+# Test the deployment
+./scripts/test.sh dev
+```
+
+### Option 2: Manual Deployment
 
 #### Step 1: Deploy Infrastructure
 
 ```bash
-./scripts/deploy.sh dev
+aws cloudformation create-stack \
+  --stack-name pai-agent-dev \
+  --template-body file://infra/cloudformation/main.yaml \
+  --parameters ParameterKey=EnvironmentName,ParameterValue=dev \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --region us-east-1
+
+# Wait for completion
+aws cloudformation wait stack-create-complete \
+  --stack-name pai-agent-dev \
+  --region us-east-1
 ```
 
-This will:
-- Create KMS encryption keys
-- Set up DynamoDB tables for short-term and long-term memory
-- Create S3 bucket for knowledge base
-- Deploy Lambda functions (placeholder code)
-- Set up HTTP API Gateway
-- Configure all IAM roles and permissions
-
-#### Step 2: Build and Package Lambda Functions
+#### Step 2: Package Lambda Functions
 
 ```bash
-npm run build
-./scripts/package-functions.sh
+# Create package directory
+mkdir -p build/lambda-packages
+
+# Install dependencies
+pip install -r requirements.txt -t build/lambda-packages/dependencies \
+  --platform manylinux2014_aarch64 \
+  --only-binary=:all: \
+  --python-version 3.11
+
+# Create Lambda packages
+cd build/lambda-packages
+mkdir agent memory search
+
+# Copy dependencies and code
+for func in agent memory search; do
+  cp -r dependencies/* $func/
+  cp -r ../../src/ $func/
+  cp ../../src/lambdas/$func/handler.py $func/
+  cd $func
+  zip -r -q ../${func}.zip .
+  cd ..
+done
 ```
 
-#### Step 3: Deploy Lambda Functions
+#### Step 3: Deploy Lambda Code
 
 ```bash
-./scripts/deploy-functions.sh dev
+# Update each Lambda function
+aws lambda update-function-code \
+  --function-name pai-agent-dev \
+  --zip-file fileb://build/lambda-packages/agent.zip
+
+aws lambda update-function-code \
+  --function-name pai-memory-dev \
+  --zip-file fileb://build/lambda-packages/memory.zip
+
+aws lambda update-function-code \
+  --function-name pai-search-dev \
+  --zip-file fileb://build/lambda-packages/search.zip
 ```
 
-#### Step 4: Run Smoke Tests
+## Verify Deployment
 
-```bash
-./scripts/smoke-test.sh dev
-```
-
-### Option 2: Using GitHub Actions
-
-1. **Set up GitHub Secrets**:
-   - Go to repository Settings > Secrets and variables > Actions
-   - Add secret: `AWS_ROLE_ARN` (ARN of IAM role for GitHub Actions)
-
-2. **Configure OIDC Provider** (recommended over access keys):
-   ```bash
-   # Create OIDC provider for GitHub Actions
-   aws iam create-open-id-connect-provider \
-     --url https://token.actions.githubusercontent.com \
-     --client-id-list sts.amazonaws.com \
-     --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1
-   ```
-
-3. **Push to main branch** or trigger workflow manually:
-   - Push: `git push origin main`
-   - Manual: Go to Actions tab > Deploy PAI to AWS > Run workflow
-
-## Environment Configuration
-
-### Development Environment
-
-```bash
-./scripts/deploy.sh dev
-```
-
-### Production Environment
-
-```bash
-./scripts/deploy.sh prod
-```
-
-## Post-Deployment
-
-### Get API Endpoint
+### 1. Get API Endpoint
 
 ```bash
 aws cloudformation describe-stacks \
-  --stack-name pai-dev \
+  --stack-name pai-agent-dev \
   --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' \
   --output text
 ```
 
-### Test the API
+### 2. Test the API
 
 ```bash
-# Chat endpoint
-curl -X POST https://YOUR_API_ENDPOINT/dev/chat \
+# Send a test message
+curl -X POST https://your-api-endpoint/chat \
   -H "Content-Type: application/json" \
-  -d '{"message":"Hello, AI!"}'
-
-# Store knowledge
-curl -X POST https://YOUR_API_ENDPOINT/dev/memory \
-  -H "Content-Type: application/json" \
-  -d '{"action":"store","content":"Important information","category":"notes"}'
-
-# Search knowledge
-curl -X POST https://YOUR_API_ENDPOINT/dev/search \
-  -H "Content-Type: application/json" \
-  -d '{"query":"important information","topK":5}'
+  -d '{
+    "message": "Hello! What can you help me with?",
+    "conversation_id": "test-001"
+  }'
 ```
 
-## Cost Optimization Tips
+Expected response:
+```json
+{
+  "conversation_id": "test-001",
+  "message": "Hello! I'm your personal AI assistant...",
+  "timestamp": 1234567890,
+  "message_id": "msg-xxxxx"
+}
+```
 
-1. **Lambda**:
-   - Using ARM64 for ~20% cost savings
-   - Reserved concurrency limits prevent runaway costs
-   - Memory optimized per function
+### 3. Check Logs
 
-2. **DynamoDB**:
-   - On-demand pricing (pay per request)
-   - TTL enabled for short-term memory (auto-cleanup)
-   - Point-in-time recovery for data protection
+```bash
+# View Lambda logs
+aws logs tail /aws/lambda/pai-agent-dev --follow
+```
 
-3. **S3**:
-   - Intelligent-Tiering enabled
-   - Lifecycle policies configured
-   - Server-side encryption with KMS
+## Post-Deployment Configuration
 
-4. **API Gateway**:
-   - HTTP API (cheaper than REST API)
-   - No custom domain (saves $0.50/month)
+### 1. Initialize Vector Index
 
-5. **Monitoring**:
-   - CloudWatch Logs with 7-day retention
-   - Basic monitoring only
+The vector search index needs to be created on first use:
 
-**Expected Monthly Cost for Single User**: $1-5/month (depending on usage)
+```bash
+# This will be automatically created when the first memory is indexed
+# Or you can create it manually via the OpenSearch dashboard
+```
 
-## LLM Integration (Next Steps)
+### 2. Configure Retention Policies
 
-### Option A: OpenAI
-
-1. Get API key from https://platform.openai.com
-2. Store in AWS Systems Manager Parameter Store:
-   ```bash
-   aws ssm put-parameter \
-     --name /pai/dev/openai-api-key \
-     --value "sk-xxxxx" \
-     --type SecureString
-   ```
-3. Update Lambda code to use OpenAI API
-
-### Option B: AWS Bedrock
-
-1. Enable Bedrock in your AWS account
-2. Update Lambda execution role with Bedrock permissions
-3. Use Bedrock SDK in Lambda functions
+Update DynamoDB TTL settings if needed:
+- Short-term memory: 7 days (default)
+- Long-term memory: 365 days (default)
 
 ## Troubleshooting
 
-### CloudFormation Stack Failed
+### Common Issues
+
+#### 1. Stack Creation Fails
+
+**Problem**: CloudFormation stack fails to create
+
+**Solutions**:
+- Check AWS credentials: `aws sts get-caller-identity`
+- Verify IAM permissions
+- Check CloudFormation events for specific errors:
+  ```bash
+  aws cloudformation describe-stack-events --stack-name pai-agent-dev
+  ```
+
+#### 2. Lambda Function Fails
+
+**Problem**: Lambda returns 500 error
+
+**Solutions**:
+- Check Lambda logs:
+  ```bash
+  aws logs tail /aws/lambda/pai-agent-dev --follow
+  ```
+- Verify environment variables are set
+- Check IAM role permissions
+
+#### 3. Bedrock Access Denied
+
+**Problem**: "Access denied" when calling Bedrock
+
+**Solutions**:
+- Ensure you've requested model access in Bedrock console
+- Verify IAM role has `bedrock:InvokeModel` permission
+- Check the region supports Bedrock (us-east-1, us-west-2, etc.)
+
+#### 4. OpenSearch Connection Issues
+
+**Problem**: Vector search not working
+
+**Solutions**:
+- Verify OpenSearch Serverless collection is created
+- Check network policy allows access
+- Verify data access policy includes Lambda execution role
+
+## Updating the Deployment
+
+### Update Code Only
 
 ```bash
-# Check stack events
-aws cloudformation describe-stack-events \
-  --stack-name pai-dev \
-  --max-items 20
-
-# Delete failed stack
-./scripts/destroy.sh dev
+./scripts/package-lambdas.sh dev
 ```
 
-### Lambda Function Errors
+### Update Infrastructure
 
 ```bash
-# View logs
-aws logs tail /aws/lambda/pai-chat-dev --follow
-
-# Update function code
-./scripts/deploy-functions.sh dev
+./scripts/deploy.sh dev
 ```
 
-### Permission Errors
-
-Check IAM role policies in CloudFormation template (infrastructure/main.yaml)
-
-## Clean Up
-
-To avoid ongoing costs, destroy the stack when not in use:
+### Full Redeployment
 
 ```bash
-./scripts/destroy.sh dev
+# Delete stack
+./scripts/cleanup.sh dev
+
+# Redeploy
+./scripts/deploy.sh dev
+./scripts/package-lambdas.sh dev
+```
+
+## Cost Management
+
+### Expected Monthly Costs (Low Usage)
+
+- **Lambda**: $1-3/month
+- **DynamoDB**: $1-2/month
+- **S3**: $0.50-1/month
+- **OpenSearch Serverless**: $5-10/month
+- **Bedrock**: $5-15/month
+
+**Total**: ~$10-30/month
+
+### Cost Optimization Tips
+
+1. **Use ARM64 Lambda**: 20% cheaper (already configured)
+2. **Enable S3 Intelligent-Tiering**: Automatic cost optimization
+3. **Set appropriate TTLs**: Automatically delete old data
+4. **Monitor Bedrock usage**: Most expensive component
+5. **Consider pausing OpenSearch**: If not using search
+
+## CI/CD with GitHub Actions
+
+### Setup
+
+1. Add AWS credentials to GitHub Secrets:
+   - `AWS_ACCESS_KEY_ID`
+   - `AWS_SECRET_ACCESS_KEY`
+   - `AWS_REGION`
+
+2. Workflows are automatically triggered:
+   - **test.yaml**: Runs on PRs and pushes to develop
+   - **deploy.yaml**: Runs on pushes to main
+
+### Manual Deployment
+
+```bash
+# Go to GitHub Actions → Deploy to AWS → Run workflow
+# Select environment: dev/staging/prod
+```
+
+## Security Best Practices
+
+1. **Rotate KMS Keys**: Enable automatic key rotation
+2. **Review IAM Policies**: Follow least-privilege principle
+3. **Enable CloudTrail**: Audit all API calls
+4. **Use VPC Endpoints**: For private AWS service access (optional)
+5. **Monitor Costs**: Set up billing alarms
+
+## Monitoring
+
+### CloudWatch Dashboards
+
+Create custom dashboards to monitor:
+- Lambda invocations and errors
+- DynamoDB read/write capacity
+- API Gateway requests
+- Bedrock API calls
+
+### Alarms
+
+Set up CloudWatch alarms for:
+- Lambda errors > threshold
+- API Gateway 5xx errors
+- DynamoDB throttling
+- High costs
+
+## Cleanup
+
+To completely remove the deployment:
+
+```bash
+./scripts/cleanup.sh dev
 ```
 
 This will:
 1. Empty S3 buckets
-2. Delete all resources
-3. Remove CloudFormation stack
+2. Delete CloudFormation stack
+3. Remove all resources
+4. Clean build artifacts
 
-## Security Notes
+## Next Steps
 
-1. **Encryption**:
-   - All data encrypted at rest with KMS
-   - Client-side envelope encryption for sensitive data
-   - TLS in transit via API Gateway
+- Set up monitoring and alarms
+- Configure backup policies
+- Implement frontend application
+- Add multi-user support (future)
+- Integrate additional AI models
 
-2. **Access Control**:
-   - No public access to S3 buckets
-   - Lambda functions have minimal IAM permissions
-   - API Gateway has no authentication (add API keys or Cognito for production)
+## Support
 
-3. **For Production**:
-   - Add API authentication (API keys, JWT, or Cognito)
-   - Enable AWS WAF for API Gateway
-   - Set up CloudTrail for audit logging
-   - Enable VPC for Lambda functions if needed
-   - Use AWS Secrets Manager for API keys
+For issues or questions:
+- Check CloudFormation events
+- Review Lambda logs in CloudWatch
+- Check the GitHub issues
+- Review AWS service quotas

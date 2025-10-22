@@ -1,0 +1,251 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'PAI Compute - Lambda Functions and API Gateway'
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+    Description: Environment name (dev, staging, prod)
+
+  LambdaExecutionRoleArn:
+    Type: String
+    Description: Lambda Execution Role ARN
+
+  ConversationsTableName:
+    Type: String
+    Description: DynamoDB Conversations Table Name
+
+  MemoriesTableName:
+    Type: String
+    Description: DynamoDB Memories Table Name
+
+  LongTermMemoryBucketName:
+    Type: String
+    Description: S3 Long-term Memory Bucket Name
+
+  VectorSearchEndpoint:
+    Type: String
+    Description: OpenSearch Serverless Endpoint
+
+  KMSKeyId:
+    Type: String
+    Description: KMS Key ID for encryption
+
+Resources:
+  # API Gateway HTTP API
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub 'pai-api-${EnvironmentName}'
+      ProtocolType: HTTP
+      Description: PAI Agent API
+      CorsConfiguration:
+        AllowOrigins:
+          - '*'
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        AllowHeaders:
+          - '*'
+
+  # API Gateway Stage
+  HttpApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: !Ref EnvironmentName
+      AutoDeploy: true
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 20
+        ThrottlingRateLimit: 10
+
+  # Agent Lambda Function
+  AgentFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'pai-agent-${EnvironmentName}'
+      Runtime: python3.11
+      Handler: handler.lambda_handler
+      Role: !Ref LambdaExecutionRoleArn
+      Timeout: 60
+      MemorySize: 512
+      Architectures:
+        - arm64
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps({'message': 'Agent function - placeholder'})
+              }
+      Environment:
+        Variables:
+          CONVERSATIONS_TABLE: !Ref ConversationsTableName
+          MEMORIES_TABLE: !Ref MemoriesTableName
+          MEMORY_BUCKET: !Ref LongTermMemoryBucketName
+          VECTOR_SEARCH_ENDPOINT: !Ref VectorSearchEndpoint
+          KMS_KEY_ID: !Ref KMSKeyId
+          AI_MODEL_ID: 'anthropic.claude-3-sonnet-20240229-v1:0'
+          EMBEDDING_MODEL_ID: 'amazon.titan-embed-text-v2:0'
+          ENVIRONMENT: !Ref EnvironmentName
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Project
+          Value: PAI
+
+  # Agent Lambda Permission
+  AgentFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AgentFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*'
+
+  # Agent Lambda Integration
+  AgentIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AgentFunction.Arn}/invocations'
+      PayloadFormatVersion: '2.0'
+
+  # Agent Route
+  AgentRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'POST /chat'
+      Target: !Sub 'integrations/${AgentIntegration}'
+
+  # Memory Lambda Function
+  MemoryFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'pai-memory-${EnvironmentName}'
+      Runtime: python3.11
+      Handler: handler.lambda_handler
+      Role: !Ref LambdaExecutionRoleArn
+      Timeout: 30
+      MemorySize: 256
+      Architectures:
+        - arm64
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps({'message': 'Memory function - placeholder'})
+              }
+      Environment:
+        Variables:
+          CONVERSATIONS_TABLE: !Ref ConversationsTableName
+          MEMORIES_TABLE: !Ref MemoriesTableName
+          MEMORY_BUCKET: !Ref LongTermMemoryBucketName
+          KMS_KEY_ID: !Ref KMSKeyId
+          ENVIRONMENT: !Ref EnvironmentName
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Project
+          Value: PAI
+
+  # Search Lambda Function
+  SearchFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'pai-search-${EnvironmentName}'
+      Runtime: python3.11
+      Handler: handler.lambda_handler
+      Role: !Ref LambdaExecutionRoleArn
+      Timeout: 30
+      MemorySize: 512
+      Architectures:
+        - arm64
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps({'message': 'Search function - placeholder'})
+              }
+      Environment:
+        Variables:
+          VECTOR_SEARCH_ENDPOINT: !Ref VectorSearchEndpoint
+          MEMORIES_TABLE: !Ref MemoriesTableName
+          EMBEDDING_MODEL_ID: 'amazon.titan-embed-text-v2:0'
+          ENVIRONMENT: !Ref EnvironmentName
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Project
+          Value: PAI
+
+  # Search Lambda Permission
+  SearchFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SearchFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*'
+
+  # Search Lambda Integration
+  SearchIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SearchFunction.Arn}/invocations'
+      PayloadFormatVersion: '2.0'
+
+  # Search Route
+  SearchRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'POST /search'
+      Target: !Sub 'integrations/${SearchIntegration}'
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway Endpoint URL
+    Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${EnvironmentName}'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiEndpoint'
+
+  ApiId:
+    Description: API Gateway ID
+    Value: !Ref HttpApi
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiId'
+
+  AgentFunctionArn:
+    Description: Agent Lambda Function ARN
+    Value: !GetAtt AgentFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-AgentFunctionArn'
+
+  AgentFunctionName:
+    Description: Agent Lambda Function Name
+    Value: !Ref AgentFunction
+    Export:
+      Name: !Sub '${AWS::StackName}-AgentFunctionName'
+
+  MemoryFunctionArn:
+    Description: Memory Lambda Function ARN
+    Value: !GetAtt MemoryFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-MemoryFunctionArn'
+
+  SearchFunctionArn:
+    Description: Search Lambda Function ARN
+    Value: !GetAtt SearchFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-SearchFunctionArn'

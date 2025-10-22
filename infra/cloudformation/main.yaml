@@ -1,0 +1,160 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'PAI - Personal AI Agent Main Stack'
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+    Description: Environment name (dev, staging, prod)
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+
+Resources:
+  # Security Stack (KMS, IAM)
+  SecurityStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./security.yaml
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Project
+          Value: PAI
+        - Key: Stack
+          Value: Security
+
+  # Storage Stack (DynamoDB, S3)
+  StorageStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: SecurityStack
+    Properties:
+      TemplateURL: ./storage.yaml
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        KMSKeyArn: !GetAtt SecurityStack.Outputs.KMSKeyArn
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Project
+          Value: PAI
+        - Key: Stack
+          Value: Storage
+
+  # AI Stack (OpenSearch Serverless)
+  AIStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: SecurityStack
+    Properties:
+      TemplateURL: ./ai.yaml
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        LambdaExecutionRoleArn: !GetAtt SecurityStack.Outputs.LambdaExecutionRoleArn
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Project
+          Value: PAI
+        - Key: Stack
+          Value: AI
+
+  # Compute Stack (Lambda, API Gateway)
+  ComputeStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - SecurityStack
+      - StorageStack
+      - AIStack
+    Properties:
+      TemplateURL: ./compute.yaml
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        LambdaExecutionRoleArn: !GetAtt SecurityStack.Outputs.LambdaExecutionRoleArn
+        ConversationsTableName: !GetAtt StorageStack.Outputs.ConversationsTableName
+        MemoriesTableName: !GetAtt StorageStack.Outputs.MemoriesTableName
+        LongTermMemoryBucketName: !GetAtt StorageStack.Outputs.LongTermMemoryBucketName
+        VectorSearchEndpoint: !GetAtt AIStack.Outputs.VectorSearchCollectionEndpoint
+        KMSKeyId: !GetAtt SecurityStack.Outputs.KMSKeyId
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Project
+          Value: PAI
+        - Key: Stack
+          Value: Compute
+
+Outputs:
+  # API Outputs
+  ApiEndpoint:
+    Description: API Gateway Endpoint URL
+    Value: !GetAtt ComputeStack.Outputs.ApiEndpoint
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiEndpoint'
+
+  # Security Outputs
+  KMSKeyId:
+    Description: KMS Key ID
+    Value: !GetAtt SecurityStack.Outputs.KMSKeyId
+    Export:
+      Name: !Sub '${AWS::StackName}-KMSKeyId'
+
+  # Storage Outputs
+  ConversationsTable:
+    Description: Conversations Table Name
+    Value: !GetAtt StorageStack.Outputs.ConversationsTableName
+    Export:
+      Name: !Sub '${AWS::StackName}-ConversationsTable'
+
+  MemoriesTable:
+    Description: Memories Table Name
+    Value: !GetAtt StorageStack.Outputs.MemoriesTableName
+    Export:
+      Name: !Sub '${AWS::StackName}-MemoriesTable'
+
+  LongTermMemoryBucket:
+    Description: Long-term Memory Bucket Name
+    Value: !GetAtt StorageStack.Outputs.LongTermMemoryBucketName
+    Export:
+      Name: !Sub '${AWS::StackName}-LongTermMemoryBucket'
+
+  # AI Outputs
+  VectorSearchEndpoint:
+    Description: Vector Search Endpoint
+    Value: !GetAtt AIStack.Outputs.VectorSearchCollectionEndpoint
+    Export:
+      Name: !Sub '${AWS::StackName}-VectorSearchEndpoint'
+
+  VectorSearchDashboard:
+    Description: Vector Search Dashboard
+    Value: !GetAtt AIStack.Outputs.VectorSearchDashboardEndpoint
+    Export:
+      Name: !Sub '${AWS::StackName}-VectorSearchDashboard'
+
+  # Lambda Outputs
+  AgentFunctionName:
+    Description: Agent Lambda Function Name
+    Value: !GetAtt ComputeStack.Outputs.AgentFunctionName
+    Export:
+      Name: !Sub '${AWS::StackName}-AgentFunctionName'
+
+  # Quick Start Information
+  QuickStartGuide:
+    Description: Quick Start Information
+    Value: !Sub |
+      PAI Agent deployed successfully!
+
+      API Endpoint: ${ComputeStack.Outputs.ApiEndpoint}
+
+      Test the API:
+      curl -X POST ${ComputeStack.Outputs.ApiEndpoint}/chat \
+        -H "Content-Type: application/json" \
+        -d '{"message": "Hello!", "conversation_id": "test-123"}'
+
+      View logs:
+      aws logs tail /aws/lambda/${ComputeStack.Outputs.AgentFunctionName} --follow
+
+      Vector Search Dashboard:
+      ${AIStack.Outputs.VectorSearchDashboardEndpoint}

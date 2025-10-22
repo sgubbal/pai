@@ -1,144 +1,312 @@
-# Quick Start Guide
+# PAI Agent - Quick Start Guide
 
-Get your Personal AI Agent running in under 10 minutes!
+Get your Personal AI Agent up and running in 15 minutes!
 
 ## Prerequisites
 
 - AWS Account
 - AWS CLI configured
-- Node.js 20+
+- Python 3.11+
+- jq (JSON processor)
 
-## Step 1: Clone and Install
+## Step 1: Enable AWS Bedrock Models (5 minutes)
+
+1. Go to [AWS Bedrock Console](https://console.aws.amazon.com/bedrock/)
+2. Navigate to **Model access** in the left sidebar
+3. Click **Request model access** or **Manage model access**
+4. Enable the following models:
+   - ✅ **Claude 3 Sonnet** (anthropic.claude-3-sonnet-20240229-v1:0)
+   - ✅ **Titan Embeddings V2** (amazon.titan-embed-text-v2:0)
+5. Click **Save changes**
+6. Wait for approval (usually instant)
+
+## Step 2: Clone and Setup (2 minutes)
 
 ```bash
+# Clone the repository
 git clone <your-repo-url>
 cd pai
-npm install
+
+# Copy environment template
+cp .env.example .env
+
+# Edit .env with your AWS account details
+# Required: AWS_REGION, AWS_ACCOUNT_ID
+nano .env
+
+# Install dependencies
+pip install -r requirements-dev.txt
 ```
 
-## Step 2: Build the Project
+## Step 3: Deploy Infrastructure (5-10 minutes)
 
 ```bash
-npm run build
-```
+# Make scripts executable (if not already)
+chmod +x scripts/*.sh
 
-## Step 3: Deploy to AWS
-
-```bash
-# Deploy infrastructure (takes ~3-5 minutes)
+# Deploy CloudFormation stack
 ./scripts/deploy.sh dev
 ```
 
-## Step 4: Package and Deploy Functions
+This will create:
+- ✅ KMS encryption key
+- ✅ DynamoDB tables (conversations, memories)
+- ✅ S3 bucket (long-term storage)
+- ✅ OpenSearch Serverless (vector search)
+- ✅ Lambda functions (agent, memory, search)
+- ✅ API Gateway endpoint
+
+## Step 4: Deploy Lambda Code (2 minutes)
 
 ```bash
-# Package Lambda functions
-./scripts/package-functions.sh
-
-# Deploy functions
-./scripts/deploy-functions.sh dev
+# Package and deploy Lambda functions
+./scripts/package-lambdas.sh dev
 ```
 
-## Step 5: Test Your AI Agent
+## Step 5: Test Your Agent (1 minute)
 
 ```bash
-# Run smoke tests
-./scripts/smoke-test.sh dev
+# Run automated tests
+./scripts/test.sh dev
 ```
 
-## Step 6: Get Your API Endpoint
+Or test manually:
 
 ```bash
-aws cloudformation describe-stacks \
-  --stack-name pai-dev \
+# Get your API endpoint
+export API_ENDPOINT=$(aws cloudformation describe-stacks \
+  --stack-name pai-agent-dev \
   --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' \
-  --output text
-```
+  --output text)
 
-## Example Usage
-
-### Chat with AI
-
-```bash
-curl -X POST https://YOUR_API_ENDPOINT/dev/chat \
+# Send a message
+curl -X POST $API_ENDPOINT/chat \
   -H "Content-Type: application/json" \
   -d '{
-    "message": "Hello, what can you help me with?",
-    "useKnowledgeBase": true
+    "message": "Hello! What can you help me with?",
+    "conversation_id": "quickstart-test"
   }'
 ```
 
-Response:
+Expected response:
 ```json
 {
-  "response": "AI response here...",
-  "sessionId": "uuid-here",
-  "timestamp": 1234567890
+  "conversation_id": "quickstart-test",
+  "message": "Hello! I'm your personal AI assistant...",
+  "timestamp": 1234567890,
+  "message_id": "msg-xxxxx"
 }
 ```
 
-### Store Knowledge
+## You're Done! 🎉
+
+Your Personal AI Agent is now running on AWS!
+
+## What's Next?
+
+### Monitor Your Agent
 
 ```bash
-curl -X POST https://YOUR_API_ENDPOINT/dev/memory \
+# View real-time logs
+aws logs tail /aws/lambda/pai-agent-dev --follow
+
+# Check API Gateway metrics
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/ApiGateway \
+  --metric-name Count \
+  --dimensions Name=ApiId,Value=YOUR_API_ID \
+  --start-time $(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%S) \
+  --end-time $(date -u +%Y-%m-%dT%H:%M:%S) \
+  --period 300 \
+  --statistics Sum
+```
+
+### Try Advanced Features
+
+#### 1. Have a Conversation
+
+```bash
+# First message
+curl -X POST $API_ENDPOINT/chat \
   -H "Content-Type: application/json" \
   -d '{
-    "action": "store",
-    "content": "My birthday is January 15th",
-    "category": "personal"
+    "message": "My favorite color is blue",
+    "conversation_id": "conv-001"
+  }'
+
+# Follow-up (agent remembers context)
+curl -X POST $API_ENDPOINT/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "What did I just tell you?",
+    "conversation_id": "conv-001"
   }'
 ```
 
-### Search Knowledge
+#### 2. Search Memories
 
 ```bash
-curl -X POST https://YOUR_API_ENDPOINT/dev/search \
+curl -X POST $API_ENDPOINT/search \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "when is my birthday",
-    "topK": 5
+    "query": "favorite color",
+    "limit": 5
   }'
 ```
 
-## Next Steps
+#### 3. Retrieve Conversation History
 
-1. **Integrate LLM**: Add OpenAI or AWS Bedrock integration
-2. **Build Frontend**: Create a web or mobile interface
-3. **Add Authentication**: Secure your API endpoints
-4. **Customize**: Modify Lambda functions for your use case
+```bash
+curl -X GET $API_ENDPOINT/memory/conv-001
+```
+
+### Customize Your Agent
+
+Edit the system prompt in `src/lambdas/agent/handler.py:88`:
+
+```python
+system_prompt = """You are a helpful personal AI assistant...
+[Your custom instructions here]
+"""
+```
+
+Then redeploy:
+```bash
+./scripts/package-lambdas.sh dev
+```
+
+## Common Issues
+
+### Issue: "Access Denied" from Bedrock
+
+**Solution**: Ensure you've enabled model access in the Bedrock console (Step 1)
+
+### Issue: Stack creation fails
+
+**Solution**: Check CloudFormation events:
+```bash
+aws cloudformation describe-stack-events \
+  --stack-name pai-agent-dev \
+  --max-items 10
+```
+
+### Issue: Lambda timeout
+
+**Solution**: Bedrock first calls can be slow. Wait and retry, or increase Lambda timeout in `infra/cloudformation/compute.yaml`
+
+## Cost Monitoring
+
+Check your costs:
+
+```bash
+# Get current month costs
+aws ce get-cost-and-usage \
+  --time-period Start=$(date +%Y-%m-01),End=$(date +%Y-%m-%d) \
+  --granularity MONTHLY \
+  --metrics UnblendedCost \
+  --group-by Type=SERVICE
+```
+
+Expected costs: $10-30/month for low usage
 
 ## Clean Up
 
-When you're done testing:
+To delete everything:
 
 ```bash
-./scripts/destroy.sh dev
+./scripts/cleanup.sh dev
 ```
 
-## Cost Estimate
+**Warning**: This is permanent and will delete all your data!
 
-With light usage (testing):
-- **First Month**: ~$1-2 (mostly free tier)
-- **Ongoing**: ~$1-5/month for single user
+## Next Steps
 
-The serverless architecture means you only pay for what you use!
+- 📖 Read [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed deployment guide
+- 🏗️ Read [ARCHITECTURE.md](./ARCHITECTURE.md) for technical details
+- 🔧 Explore the code in `src/` directory
+- 🚀 Set up CI/CD with GitHub Actions
+- 💻 Build a frontend application
 
-## Troubleshooting
+## Getting Help
 
-### Deployment Fails
+- Check CloudWatch logs for errors
+- Review the [DEPLOYMENT.md](./DEPLOYMENT.md) troubleshooting section
+- Open an issue on GitHub
 
-Check CloudFormation events:
-```bash
-aws cloudformation describe-stack-events --stack-name pai-dev --max-items 20
+## API Reference
+
+### POST /chat
+
+Send a message to your AI agent.
+
+**Request**:
+```json
+{
+  "message": "Your message here",
+  "conversation_id": "optional-id",
+  "use_memory": true,
+  "save_to_memory": true
+}
 ```
 
-### Function Errors
-
-View logs:
-```bash
-aws logs tail /aws/lambda/pai-chat-dev --follow
+**Response**:
+```json
+{
+  "conversation_id": "conv-xxx",
+  "message": "AI response",
+  "timestamp": 1234567890,
+  "message_id": "msg-xxx"
+}
 ```
 
-### Need Help?
+### POST /search
 
-Check the full [DEPLOYMENT.md](./DEPLOYMENT.md) guide for detailed instructions.
+Semantic search across your memories.
+
+**Request**:
+```json
+{
+  "query": "Search query",
+  "limit": 10,
+  "category": "optional",
+  "min_score": 0.5
+}
+```
+
+**Response**:
+```json
+{
+  "query": "Search query",
+  "count": 3,
+  "results": [
+    {
+      "memory": {...},
+      "score": 0.95,
+      "rank": 1
+    }
+  ]
+}
+```
+
+### GET /memory/{conversation_id}
+
+Get conversation history.
+
+**Response**:
+```json
+{
+  "conversation_id": "conv-xxx",
+  "message_count": 10,
+  "messages": [
+    {
+      "role": "user",
+      "content": "...",
+      "timestamp": 1234567890
+    }
+  ]
+}
+```
+
+---
+
+**Happy coding! Your AI agent is ready to assist you.** 🤖

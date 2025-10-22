@@ -1,0 +1,1 @@
+"""Search Lambda function"""
