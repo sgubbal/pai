@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+
+# Build outputs
+dist/
+build/
+*.js
+*.js.map
+*.d.ts
+!scripts/*.sh
+
+# Environment and secrets
+.env
+.env.local
+*.pem
+*.key
+
+# AWS
+.aws-sam/
+samconfig.toml
+
+# CloudFormation
+packaged-*.yaml
+outputs.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+.cache/

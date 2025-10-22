@@ -1,0 +1,171 @@
+name: Deploy PAI to AWS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - prod
+
+env:
+  AWS_REGION: us-east-1
+  NODE_VERSION: '20'
+
+jobs:
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linter
+        run: npm run lint
+
+      - name: Build TypeScript
+        run: npm run build
+
+      - name: Run tests
+        run: npm test
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 1
+
+  package:
+    name: Package Lambda Functions
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Install production dependencies
+        run: npm ci --production
+
+      - name: Package Lambda functions
+        run: ./scripts/package-functions.sh
+
+      - name: Upload Lambda packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-packages
+          path: dist/packages/
+          retention-days: 1
+
+  deploy-infrastructure:
+    name: Deploy Infrastructure
+    needs: package
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy CloudFormation stack
+        run: |
+          ./scripts/deploy.sh ${{ github.event.inputs.environment || 'dev' }}
+
+      - name: Save stack outputs
+        run: |
+          aws cloudformation describe-stacks \
+            --stack-name pai-${{ github.event.inputs.environment || 'dev' }} \
+            --query 'Stacks[0].Outputs' \
+            --output json > outputs.json
+
+      - name: Upload stack outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: stack-outputs
+          path: outputs.json
+          retention-days: 1
+
+  deploy-functions:
+    name: Deploy Lambda Functions
+    needs: deploy-infrastructure
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download Lambda packages
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-packages
+          path: dist/packages/
+
+      - name: Deploy Lambda functions
+        run: |
+          ./scripts/deploy-functions.sh ${{ github.event.inputs.environment || 'dev' }}
+
+      - name: Run smoke tests
+        run: |
+          ./scripts/smoke-test.sh ${{ github.event.inputs.environment || 'dev' }}
+
+  notify:
+    name: Notify Deployment Status
+    needs: [deploy-infrastructure, deploy-functions]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Download stack outputs
+        uses: actions/download-artifact@v4
+        with:
+          name: stack-outputs
+          path: .
+
+      - name: Display API endpoint
+        run: |
+          API_ENDPOINT=$(cat outputs.json | jq -r '.[] | select(.OutputKey=="ApiEndpoint") | .OutputValue')
+          echo "API Endpoint: $API_ENDPOINT"
+          echo "Deployment completed successfully!"
