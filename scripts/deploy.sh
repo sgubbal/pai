@@ -52,43 +52,49 @@ for template in infra/cloudformation/{security,storage,ai,compute}.yaml; do
 done
 
 echo ""
-echo -e "${YELLOW}Step 2: Deploying CloudFormation stack...${NC}"
+echo -e "${YELLOW}Step 2: Creating S3 bucket for CloudFormation artifacts...${NC}"
 
-# Check if stack exists
-if aws cloudformation describe-stacks \
-    --stack-name $STACK_NAME \
-    --region $REGION &> /dev/null; then
+# Create unique bucket name
+BUCKET_NAME="pai-cfn-artifacts-${ENVIRONMENT}-$(aws sts get-caller-identity --query Account --output text)"
 
-    echo "Stack exists, updating..."
-    OPERATION="update-stack"
-    WAITER="stack-update-complete"
+# Create bucket if it doesn't exist
+if ! aws s3 ls "s3://$BUCKET_NAME" 2>&1 | grep -q 'NoSuchBucket'; then
+    echo "Using existing bucket: $BUCKET_NAME"
 else
-    echo "Stack does not exist, creating..."
-    OPERATION="create-stack"
-    WAITER="stack-create-complete"
+    echo "Creating bucket: $BUCKET_NAME"
+    aws s3 mb "s3://$BUCKET_NAME" --region $REGION
 fi
 
-# Deploy stack
-aws cloudformation $OPERATION \
+echo -e "${GREEN}✓ S3 bucket ready${NC}"
+
+echo ""
+echo -e "${YELLOW}Step 3: Packaging CloudFormation templates...${NC}"
+
+# Package the template (uploads nested stacks to S3)
+aws cloudformation package \
+    --template-file infra/cloudformation/main.yaml \
+    --s3-bucket $BUCKET_NAME \
+    --s3-prefix cloudformation-templates \
+    --output-template-file /tmp/packaged-template.yaml \
+    --region $REGION
+
+echo -e "${GREEN}✓ Templates packaged and uploaded to S3${NC}"
+
+echo ""
+echo -e "${YELLOW}Step 4: Deploying CloudFormation stack...${NC}"
+
+# Deploy the packaged template
+aws cloudformation deploy \
     --stack-name $STACK_NAME \
-    --template-body file://infra/cloudformation/main.yaml \
-    --parameters ParameterKey=EnvironmentName,ParameterValue=$ENVIRONMENT \
+    --template-file /tmp/packaged-template.yaml \
+    --parameter-overrides EnvironmentName=$ENVIRONMENT \
     --capabilities CAPABILITY_NAMED_IAM \
     --region $REGION
 
-echo ""
-echo -e "${YELLOW}Waiting for stack operation to complete...${NC}"
-echo "(This may take several minutes)"
-
-# Wait for stack operation to complete
-aws cloudformation wait $WAITER \
-    --stack-name $STACK_NAME \
-    --region $REGION
-
-echo -e "${GREEN}✓ Stack operation completed successfully${NC}"
+echo -e "${GREEN}✓ Stack deployment completed successfully${NC}"
 
 echo ""
-echo -e "${YELLOW}Step 3: Getting stack outputs...${NC}"
+echo -e "${YELLOW}Step 5: Getting stack outputs...${NC}"
 
 # Get stack outputs
 OUTPUTS=$(aws cloudformation describe-stacks \
