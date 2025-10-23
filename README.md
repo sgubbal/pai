@@ -229,9 +229,10 @@ Manual workflow dispatch:
 
 ### CI/CD Setup
 
-1. Create IAM OIDC identity provider for GitHub
-2. Create IAM role with CloudFormation, Lambda, DynamoDB, S3, Bedrock permissions
-3. Add `AWS_ROLE_ARN` to GitHub secrets
+1. Add AWS credentials to GitHub Secrets:
+   - `AWS_ACCESS_KEY_ID`
+   - `AWS_SECRET_ACCESS_KEY`
+   - `AWS_REGION`
 
 ## Cost Breakdown
 
