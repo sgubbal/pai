@@ -1,18 +1,20 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'PAI Security - KMS Keys and IAM Roles'
+Description: 'Personal AI Chatbot - Security Stack (KMS, IAM)'
 
 Parameters:
-  EnvironmentName:
+  Environment:
     Type: String
-    Default: dev
-    Description: Environment name (dev, staging, prod)
+    Description: Deployment environment
 
 Resources:
-  # KMS Key for end-to-end encryption
+  #######################
+  # KMS Encryption Key
+  #######################
   EncryptionKey:
     Type: AWS::KMS::Key
     Properties:
-      Description: !Sub 'PAI Encryption Key - ${EnvironmentName}'
+      Description: !Sub 'Encryption key for Personal AI Chatbot - ${Environment}'
+      EnableKeyRotation: true
       KeyPolicy:
         Version: '2012-10-17'
         Statement:
@@ -22,37 +24,47 @@ Resources:
               AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
             Action: 'kms:*'
             Resource: '*'
+
           - Sid: Allow Lambda to use the key
             Effect: Allow
             Principal:
-              Service: lambda.amazonaws.com
+              AWS: !GetAtt LambdaExecutionRole.Arn
             Action:
               - 'kms:Decrypt'
               - 'kms:Encrypt'
               - 'kms:GenerateDataKey'
               - 'kms:DescribeKey'
             Resource: '*'
-          - Sid: Allow S3 to use the key
+
+          - Sid: Allow CloudWatch Logs
             Effect: Allow
             Principal:
-              Service: s3.amazonaws.com
+              Service: !Sub 'logs.${AWS::Region}.amazonaws.com'
             Action:
+              - 'kms:Encrypt'
               - 'kms:Decrypt'
-              - 'kms:GenerateDataKey'
+              - 'kms:ReEncrypt*'
+              - 'kms:GenerateDataKey*'
+              - 'kms:CreateGrant'
+              - 'kms:DescribeKey'
             Resource: '*'
-      EnableKeyRotation: true
+            Condition:
+              ArnLike:
+                'kms:EncryptionContext:aws:logs:arn': !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
 
   EncryptionKeyAlias:
     Type: AWS::KMS::Alias
     Properties:
-      AliasName: !Sub 'alias/pai-encryption-${EnvironmentName}'
+      AliasName: !Sub 'alias/chatbot-${Environment}'
       TargetKeyId: !Ref EncryptionKey
 
+  #######################
   # Lambda Execution Role
+  #######################
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub 'pai-lambda-execution-role-${EnvironmentName}'
+      RoleName: !Sub 'chatbot-lambda-role-${Environment}'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -63,32 +75,63 @@ Resources:
       ManagedPolicyArns:
         - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
       Policies:
-        - PolicyName: PAILambdaPolicy
+        ###################
+        # DynamoDB Access
+        ###################
+        - PolicyName: DynamoDBAccess
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              # DynamoDB permissions
               - Effect: Allow
                 Action:
                   - 'dynamodb:PutItem'
                   - 'dynamodb:GetItem'
-                  - 'dynamodb:UpdateItem'
                   - 'dynamodb:Query'
-                  - 'dynamodb:Scan'
+                  - 'dynamodb:UpdateItem'
                   - 'dynamodb:DeleteItem'
                 Resource:
-                  - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/pai-*'
-              # S3 permissions
+                  - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/chatbot-conversations-${Environment}'
+                  - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/chatbot-conversations-${Environment}/index/*'
+
+        ###################
+        # S3 Access (for RAG)
+        ###################
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
               - Effect: Allow
                 Action:
                   - 's3:GetObject'
                   - 's3:PutObject'
-                  - 's3:DeleteObject'
+                  - 'S3:DeleteObject'
                   - 's3:ListBucket'
                 Resource:
-                  - !Sub 'arn:aws:s3:::pai-*'
-                  - !Sub 'arn:aws:s3:::pai-*/*'
-              # KMS permissions
+                  - !Sub 'arn:aws:s3:::chatbot-documents-${AWS::AccountId}-${Environment}'
+                  - !Sub 'arn:aws:s3:::chatbot-documents-${AWS::AccountId}-${Environment}/*'
+
+        ###################
+        # Bedrock Access
+        ###################
+        - PolicyName: BedrockAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'bedrock:InvokeModel'
+                  - 'bedrock:InvokeModelWithResponseStream'
+                Resource:
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0'
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0'
+
+        ###################
+        # KMS Access
+        ###################
+        - PolicyName: KMSAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
               - Effect: Allow
                 Action:
                   - 'kms:Decrypt'
@@ -96,24 +139,24 @@ Resources:
                   - 'kms:GenerateDataKey'
                   - 'kms:DescribeKey'
                 Resource: !GetAtt EncryptionKey.Arn
-              # Bedrock permissions
-              - Effect: Allow
-                Action:
-                  - 'bedrock:InvokeModel'
-                  - 'bedrock:InvokeModelWithResponseStream'
-                Resource: '*'
-              # OpenSearch Serverless permissions
+
+        ###################
+        # OpenSearch Access (for RAG)
+        ###################
+        - PolicyName: OpenSearchAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
               - Effect: Allow
                 Action:
                   - 'aoss:APIAccessAll'
-                Resource: '*'
-              # CloudWatch Logs permissions
-              - Effect: Allow
-                Action:
-                  - 'logs:CreateLogGroup'
-                  - 'logs:CreateLogStream'
-                  - 'logs:PutLogEvents'
-                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/pai-*'
+                Resource: !Sub 'arn:aws:aoss:${AWS::Region}:${AWS::AccountId}:collection/*'
+
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: PersonalAIChatbot
 
 Outputs:
   KMSKeyId:
@@ -123,19 +166,17 @@ Outputs:
       Name: !Sub '${AWS::StackName}-KMSKeyId'
 
   KMSKeyArn:
-    Description: KMS Key ARN for encryption
+    Description: KMS Key ARN
     Value: !GetAtt EncryptionKey.Arn
     Export:
       Name: !Sub '${AWS::StackName}-KMSKeyArn'
 
   LambdaExecutionRoleArn:
-    Description: Lambda Execution Role ARN
+    Description: Lambda execution role ARN
     Value: !GetAtt LambdaExecutionRole.Arn
     Export:
       Name: !Sub '${AWS::StackName}-LambdaExecutionRoleArn'
 
   LambdaExecutionRoleName:
-    Description: Lambda Execution Role Name
+    Description: Lambda execution role name
     Value: !Ref LambdaExecutionRole
-    Export:
-      Name: !Sub '${AWS::StackName}-LambdaExecutionRoleName'

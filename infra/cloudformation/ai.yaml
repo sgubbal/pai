@@ -1,134 +1,47 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'PAI AI Services - OpenSearch Serverless for Vector Search'
+Description: 'Personal AI Chatbot - AI Stack (OpenSearch Serverless)'
 
 Parameters:
-  EnvironmentName:
+  Environment:
     Type: String
-    Default: dev
-    Description: Environment name (dev, staging, prod)
-
   LambdaExecutionRoleArn:
     Type: String
-    Description: Lambda Execution Role ARN
 
 Resources:
-  # OpenSearch Serverless Collection for Vector Search
   VectorSearchCollection:
     Type: AWS::OpenSearchServerless::Collection
-    DependsOn:
-      - VectorSearchEncryptionPolicy
-      - VectorSearchNetworkPolicy
-      - VectorSearchAccessPolicy
     Properties:
-      Name: !Sub 'pai-vectors-${EnvironmentName}'
+      Name: !Sub 'chatbot-vectors-${Environment}'
       Type: VECTORSEARCH
-      Description: Vector search collection for PAI memories
+      Description: Vector database for RAG
       Tags:
         - Key: Environment
-          Value: !Ref EnvironmentName
-        - Key: Project
-          Value: PAI
+          Value: !Ref Environment
 
-  # Encryption Policy
-  VectorSearchEncryptionPolicy:
-    Type: AWS::OpenSearchServerless::SecurityPolicy
-    Properties:
-      Name: !Sub 'pai-vectors-encryption-${EnvironmentName}'
-      Type: encryption
-      Policy: !Sub |
-        {
-          "Rules": [
-            {
-              "ResourceType": "collection",
-              "Resource": ["collection/pai-vectors-${EnvironmentName}"]
-            }
-          ],
-          "AWSOwnedKey": true
-        }
-
-  # Network Policy (Public access for simplicity - can be restricted later)
-  VectorSearchNetworkPolicy:
-    Type: AWS::OpenSearchServerless::SecurityPolicy
-    Properties:
-      Name: !Sub 'pai-vectors-network-${EnvironmentName}'
-      Type: network
-      Policy: !Sub |
-        [
-          {
-            "Rules": [
-              {
-                "ResourceType": "collection",
-                "Resource": ["collection/pai-vectors-${EnvironmentName}"]
-              },
-              {
-                "ResourceType": "dashboard",
-                "Resource": ["collection/pai-vectors-${EnvironmentName}"]
-              }
-            ],
-            "AllowFromPublic": true
-          }
-        ]
-
-  # Data Access Policy
   VectorSearchAccessPolicy:
     Type: AWS::OpenSearchServerless::AccessPolicy
     Properties:
-      Name: !Sub 'pai-vectors-access-${EnvironmentName}'
+      Name: !Sub 'chatbot-vectors-policy-${Environment}'
       Type: data
       Policy: !Sub |
         [
           {
             "Rules": [
               {
-                "ResourceType": "collection",
-                "Resource": ["collection/pai-vectors-${EnvironmentName}"],
-                "Permission": [
-                  "aoss:CreateCollectionItems",
-                  "aoss:UpdateCollectionItems",
-                  "aoss:DescribeCollectionItems"
-                ]
-              },
-              {
                 "ResourceType": "index",
-                "Resource": ["index/pai-vectors-${EnvironmentName}/*"],
-                "Permission": [
-                  "aoss:CreateIndex",
-                  "aoss:DescribeIndex",
-                  "aoss:ReadDocument",
-                  "aoss:WriteDocument",
-                  "aoss:UpdateIndex",
-                  "aoss:DeleteIndex"
-                ]
+                "Resource": ["index/chatbot-vectors-${Environment}/*"],
+                "Permission": ["aoss:*"]
               }
             ],
-            "Principal": [
-              "${LambdaExecutionRoleArn}",
-              "arn:aws:iam::${AWS::AccountId}:root"
-            ]
+            "Principal": ["${LambdaExecutionRoleArn}"]
           }
         ]
 
 Outputs:
-  VectorSearchCollectionId:
-    Description: OpenSearch Serverless Collection ID
-    Value: !GetAtt VectorSearchCollection.Id
-    Export:
-      Name: !Sub '${AWS::StackName}-VectorSearchCollectionId'
-
-  VectorSearchCollectionArn:
-    Description: OpenSearch Serverless Collection ARN
-    Value: !GetAtt VectorSearchCollection.Arn
-    Export:
-      Name: !Sub '${AWS::StackName}-VectorSearchCollectionArn'
-
-  VectorSearchCollectionEndpoint:
-    Description: OpenSearch Serverless Collection Endpoint
+  VectorSearchEndpoint:
     Value: !GetAtt VectorSearchCollection.CollectionEndpoint
     Export:
-      Name: !Sub '${AWS::StackName}-VectorSearchEndpoint'
+      Name: !Sub '${AWS::StackName}-VectorEndpoint'
 
-  VectorSearchDashboardEndpoint:
-    Description: OpenSearch Serverless Dashboard Endpoint
+  VectorSearchDashboard:
     Value: !GetAtt VectorSearchCollection.DashboardEndpoint
-    Export:
-      Name: !Sub '${AWS::StackName}-VectorSearchDashboard'

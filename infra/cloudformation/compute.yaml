@@ -1,44 +1,102 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'PAI Compute - Lambda Functions and API Gateway'
+Description: 'Personal AI Chatbot - Compute Stack (Lambda, API Gateway)'
 
 Parameters:
-  EnvironmentName:
+  Environment:
     Type: String
-    Default: dev
-    Description: Environment name (dev, staging, prod)
-
+  EnableRAG:
+    Type: String
   LambdaExecutionRoleArn:
     Type: String
-    Description: Lambda Execution Role ARN
-
   ConversationsTableName:
     Type: String
-    Description: DynamoDB Conversations Table Name
-
-  MemoriesTableName:
+  DocumentsBucketName:
     Type: String
-    Description: DynamoDB Memories Table Name
-
-  LongTermMemoryBucketName:
-    Type: String
-    Description: S3 Long-term Memory Bucket Name
-
+    Default: ""
   VectorSearchEndpoint:
     Type: String
-    Description: OpenSearch Serverless Endpoint
-
+    Default: ""
   KMSKeyId:
     Type: String
-    Description: KMS Key ID for encryption
+
+Conditions:
+  IsRAGEnabled: !Equals [!Ref EnableRAG, "true"]
 
 Resources:
+  #######################
+  # Lambda - Chat Handler (Phase 1)
+  #######################
+  ChatHandlerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'chatbot-chat-${Environment}'
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !Ref LambdaExecutionRoleArn
+      Architectures:
+        - arm64
+      MemorySize: 512
+      Timeout: 30
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          CONVERSATIONS_TABLE: !Ref ConversationsTableName
+          KMS_KEY_ID: !Ref KMSKeyId
+          AI_MODEL_ID: 'anthropic.claude-3-5-sonnet-20241022-v2:0'
+          ENABLE_RAG: !Ref EnableRAG
+          DOCUMENTS_BUCKET: !Ref DocumentsBucketName
+          VECTOR_SEARCH_ENDPOINT: !Ref VectorSearchEndpoint
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps({'message': 'Chatbot placeholder - deploy code with package-lambdas.sh'})
+              }
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  #######################
+  # Lambda - Ingestion Handler (Phase 2)
+  #######################
+  IngestionHandlerFunction:
+    Type: AWS::Lambda::Function
+    Condition: IsRAGEnabled
+    Properties:
+      FunctionName: !Sub 'chatbot-ingestion-${Environment}'
+      Runtime: python3.12
+      Handler: ingestion_handler.lambda_handler
+      Role: !Ref LambdaExecutionRoleArn
+      Architectures:
+        - arm64
+      MemorySize: 1024
+      Timeout: 300
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          DOCUMENTS_BUCKET: !Ref DocumentsBucketName
+          VECTOR_SEARCH_ENDPOINT: !Ref VectorSearchEndpoint
+          KMS_KEY_ID: !Ref KMSKeyId
+          EMBEDDING_MODEL_ID: 'amazon.titan-embed-text-v2:0'
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {'statusCode': 200, 'body': json.dumps({'message': 'Ingestion placeholder'})}
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  #######################
   # API Gateway HTTP API
+  #######################
   HttpApi:
     Type: AWS::ApiGatewayV2::Api
     Properties:
-      Name: !Sub 'pai-api-${EnvironmentName}'
+      Name: !Sub 'chatbot-api-${Environment}'
       ProtocolType: HTTP
-      Description: PAI Agent API
       CorsConfiguration:
         AllowOrigins:
           - '*'
@@ -48,204 +106,53 @@ Resources:
           - OPTIONS
         AllowHeaders:
           - '*'
-
-  # API Gateway Stage
-  HttpApiStage:
-    Type: AWS::ApiGatewayV2::Stage
-    Properties:
-      ApiId: !Ref HttpApi
-      StageName: !Ref EnvironmentName
-      AutoDeploy: true
-      DefaultRouteSettings:
-        ThrottlingBurstLimit: 20
-        ThrottlingRateLimit: 10
-
-  # Agent Lambda Function
-  AgentFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: !Sub 'pai-agent-${EnvironmentName}'
-      Runtime: python3.11
-      Handler: handler.lambda_handler
-      Role: !Ref LambdaExecutionRoleArn
-      Timeout: 60
-      MemorySize: 512
-      Architectures:
-        - arm64
-      Code:
-        ZipFile: |
-          import json
-          def lambda_handler(event, context):
-              return {
-                  'statusCode': 200,
-                  'body': json.dumps({'message': 'Agent function - placeholder'})
-              }
-      Environment:
-        Variables:
-          CONVERSATIONS_TABLE: !Ref ConversationsTableName
-          MEMORIES_TABLE: !Ref MemoriesTableName
-          MEMORY_BUCKET: !Ref LongTermMemoryBucketName
-          VECTOR_SEARCH_ENDPOINT: !Ref VectorSearchEndpoint
-          KMS_KEY_ID: !Ref KMSKeyId
-          AI_MODEL_ID: 'anthropic.claude-3-sonnet-20240229-v1:0'
-          EMBEDDING_MODEL_ID: 'amazon.titan-embed-text-v2:0'
-          ENVIRONMENT: !Ref EnvironmentName
+        MaxAge: 300
       Tags:
-        - Key: Environment
-          Value: !Ref EnvironmentName
-        - Key: Project
-          Value: PAI
+        Environment: !Ref Environment
 
-  # Agent Lambda Permission
-  AgentFunctionPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref AgentFunction
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*'
-
-  # Agent Lambda Integration
-  AgentIntegration:
+  ChatIntegration:
     Type: AWS::ApiGatewayV2::Integration
     Properties:
       ApiId: !Ref HttpApi
       IntegrationType: AWS_PROXY
-      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AgentFunction.Arn}/invocations'
+      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ChatHandlerFunction.Arn}/invocations'
       PayloadFormatVersion: '2.0'
 
-  # Agent Route
-  AgentRoute:
+  ChatRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref HttpApi
       RouteKey: 'POST /chat'
-      Target: !Sub 'integrations/${AgentIntegration}'
+      Target: !Sub 'integrations/${ChatIntegration}'
 
-  # Memory Lambda Function
-  MemoryFunction:
-    Type: AWS::Lambda::Function
+  ApiStage:
+    Type: AWS::ApiGatewayV2::Stage
     Properties:
-      FunctionName: !Sub 'pai-memory-${EnvironmentName}'
-      Runtime: python3.11
-      Handler: handler.lambda_handler
-      Role: !Ref LambdaExecutionRoleArn
-      Timeout: 30
-      MemorySize: 256
-      Architectures:
-        - arm64
-      Code:
-        ZipFile: |
-          import json
-          def lambda_handler(event, context):
-              return {
-                  'statusCode': 200,
-                  'body': json.dumps({'message': 'Memory function - placeholder'})
-              }
-      Environment:
-        Variables:
-          CONVERSATIONS_TABLE: !Ref ConversationsTableName
-          MEMORIES_TABLE: !Ref MemoriesTableName
-          MEMORY_BUCKET: !Ref LongTermMemoryBucketName
-          KMS_KEY_ID: !Ref KMSKeyId
-          ENVIRONMENT: !Ref EnvironmentName
-      Tags:
-        - Key: Environment
-          Value: !Ref EnvironmentName
-        - Key: Project
-          Value: PAI
+      ApiId: !Ref HttpApi
+      StageName: !Ref Environment
+      AutoDeploy: true
 
-  # Search Lambda Function
-  SearchFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: !Sub 'pai-search-${EnvironmentName}'
-      Runtime: python3.11
-      Handler: handler.lambda_handler
-      Role: !Ref LambdaExecutionRoleArn
-      Timeout: 30
-      MemorySize: 512
-      Architectures:
-        - arm64
-      Code:
-        ZipFile: |
-          import json
-          def lambda_handler(event, context):
-              return {
-                  'statusCode': 200,
-                  'body': json.dumps({'message': 'Search function - placeholder'})
-              }
-      Environment:
-        Variables:
-          VECTOR_SEARCH_ENDPOINT: !Ref VectorSearchEndpoint
-          MEMORIES_TABLE: !Ref MemoriesTableName
-          EMBEDDING_MODEL_ID: 'amazon.titan-embed-text-v2:0'
-          ENVIRONMENT: !Ref EnvironmentName
-      Tags:
-        - Key: Environment
-          Value: !Ref EnvironmentName
-        - Key: Project
-          Value: PAI
-
-  # Search Lambda Permission
-  SearchFunctionPermission:
+  ChatLambdaPermission:
     Type: AWS::Lambda::Permission
     Properties:
-      FunctionName: !Ref SearchFunction
-      Action: lambda:InvokeFunction
+      FunctionName: !Ref ChatHandlerFunction
+      Action: 'lambda:InvokeFunction'
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*'
 
-  # Search Lambda Integration
-  SearchIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId: !Ref HttpApi
-      IntegrationType: AWS_PROXY
-      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SearchFunction.Arn}/invocations'
-      PayloadFormatVersion: '2.0'
-
-  # Search Route
-  SearchRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref HttpApi
-      RouteKey: 'POST /search'
-      Target: !Sub 'integrations/${SearchIntegration}'
-
 Outputs:
   ApiEndpoint:
-    Description: API Gateway Endpoint URL
-    Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${EnvironmentName}'
+    Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
     Export:
       Name: !Sub '${AWS::StackName}-ApiEndpoint'
 
-  ApiId:
-    Description: API Gateway ID
-    Value: !Ref HttpApi
+  ChatFunctionName:
+    Value: !Ref ChatHandlerFunction
     Export:
-      Name: !Sub '${AWS::StackName}-ApiId'
+      Name: !Sub '${AWS::StackName}-ChatFunction'
 
-  AgentFunctionArn:
-    Description: Agent Lambda Function ARN
-    Value: !GetAtt AgentFunction.Arn
+  IngestionFunctionName:
+    Condition: IsRAGEnabled
+    Value: !Ref IngestionHandlerFunction
     Export:
-      Name: !Sub '${AWS::StackName}-AgentFunctionArn'
-
-  AgentFunctionName:
-    Description: Agent Lambda Function Name
-    Value: !Ref AgentFunction
-    Export:
-      Name: !Sub '${AWS::StackName}-AgentFunctionName'
-
-  MemoryFunctionArn:
-    Description: Memory Lambda Function ARN
-    Value: !GetAtt MemoryFunction.Arn
-    Export:
-      Name: !Sub '${AWS::StackName}-MemoryFunctionArn'
-
-  SearchFunctionArn:
-    Description: Search Lambda Function ARN
-    Value: !GetAtt SearchFunction.Arn
-    Export:
-      Name: !Sub '${AWS::StackName}-SearchFunctionArn'
+      Name: !Sub '${AWS::StackName}-IngestionFunction'

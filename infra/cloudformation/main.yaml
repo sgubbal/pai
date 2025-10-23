@@ -1,160 +1,151 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'PAI - Personal AI Agent Main Stack'
+Description: 'Personal AI Chatbot - Main Orchestrator Stack'
 
 Parameters:
-  EnvironmentName:
+  Environment:
     Type: String
     Default: dev
-    Description: Environment name (dev, staging, prod)
+    Description: Deployment environment
     AllowedValues:
       - dev
       - staging
       - prod
 
+  EnableRAG:
+    Type: String
+    Default: "false"
+    Description: Enable RAG (Retrieval Augmented Generation) features
+    AllowedValues:
+      - "true"
+      - "false"
+
+Conditions:
+  IsRAGEnabled: !Equals [!Ref EnableRAG, "true"]
+
 Resources:
-  # Security Stack (KMS, IAM)
+  #######################
+  # Security Stack
+  #######################
   SecurityStack:
     Type: AWS::CloudFormation::Stack
     Properties:
       TemplateURL: ./security.yaml
       Parameters:
-        EnvironmentName: !Ref EnvironmentName
+        Environment: !Ref Environment
       Tags:
         - Key: Environment
-          Value: !Ref EnvironmentName
+          Value: !Ref Environment
         - Key: Project
-          Value: PAI
-        - Key: Stack
-          Value: Security
+          Value: PersonalAIChatbot
 
-  # Storage Stack (DynamoDB, S3)
+  #######################
+  # Storage Stack
+  #######################
   StorageStack:
     Type: AWS::CloudFormation::Stack
     DependsOn: SecurityStack
     Properties:
       TemplateURL: ./storage.yaml
       Parameters:
-        EnvironmentName: !Ref EnvironmentName
-        KMSKeyArn: !GetAtt SecurityStack.Outputs.KMSKeyArn
+        Environment: !Ref Environment
+        EnableRAG: !Ref EnableRAG
+        KMSKeyId: !GetAtt SecurityStack.Outputs.KMSKeyId
       Tags:
         - Key: Environment
-          Value: !Ref EnvironmentName
+          Value: !Ref Environment
         - Key: Project
-          Value: PAI
-        - Key: Stack
-          Value: Storage
+          Value: PersonalAIChatbot
 
-  # AI Stack (OpenSearch Serverless)
+  #######################
+  # AI Stack (OpenSearch - Phase 2)
+  #######################
   AIStack:
     Type: AWS::CloudFormation::Stack
+    Condition: IsRAGEnabled
     DependsOn: SecurityStack
     Properties:
       TemplateURL: ./ai.yaml
       Parameters:
-        EnvironmentName: !Ref EnvironmentName
+        Environment: !Ref Environment
         LambdaExecutionRoleArn: !GetAtt SecurityStack.Outputs.LambdaExecutionRoleArn
       Tags:
         - Key: Environment
-          Value: !Ref EnvironmentName
+          Value: !Ref Environment
         - Key: Project
-          Value: PAI
-        - Key: Stack
-          Value: AI
+          Value: PersonalAIChatbot
 
-  # Compute Stack (Lambda, API Gateway)
+  #######################
+  # Compute Stack
+  #######################
   ComputeStack:
     Type: AWS::CloudFormation::Stack
     DependsOn:
       - SecurityStack
       - StorageStack
-      - AIStack
     Properties:
       TemplateURL: ./compute.yaml
       Parameters:
-        EnvironmentName: !Ref EnvironmentName
+        Environment: !Ref Environment
+        EnableRAG: !Ref EnableRAG
         LambdaExecutionRoleArn: !GetAtt SecurityStack.Outputs.LambdaExecutionRoleArn
         ConversationsTableName: !GetAtt StorageStack.Outputs.ConversationsTableName
-        MemoriesTableName: !GetAtt StorageStack.Outputs.MemoriesTableName
-        LongTermMemoryBucketName: !GetAtt StorageStack.Outputs.LongTermMemoryBucketName
-        VectorSearchEndpoint: !GetAtt AIStack.Outputs.VectorSearchCollectionEndpoint
+        DocumentsBucketName: !If
+          - IsRAGEnabled
+          - !GetAtt StorageStack.Outputs.DocumentsBucketName
+          - ""
+        VectorSearchEndpoint: !If
+          - IsRAGEnabled
+          - !GetAtt AIStack.Outputs.VectorSearchEndpoint
+          - ""
         KMSKeyId: !GetAtt SecurityStack.Outputs.KMSKeyId
       Tags:
         - Key: Environment
-          Value: !Ref EnvironmentName
+          Value: !Ref Environment
         - Key: Project
-          Value: PAI
-        - Key: Stack
-          Value: Compute
+          Value: PersonalAIChatbot
 
 Outputs:
-  # API Outputs
   ApiEndpoint:
-    Description: API Gateway Endpoint URL
+    Description: API Gateway endpoint URL
     Value: !GetAtt ComputeStack.Outputs.ApiEndpoint
     Export:
       Name: !Sub '${AWS::StackName}-ApiEndpoint'
 
-  # Security Outputs
-  KMSKeyId:
-    Description: KMS Key ID
-    Value: !GetAtt SecurityStack.Outputs.KMSKeyId
-    Export:
-      Name: !Sub '${AWS::StackName}-KMSKeyId'
-
-  # Storage Outputs
-  ConversationsTable:
-    Description: Conversations Table Name
+  ConversationsTableName:
+    Description: DynamoDB conversations table name
     Value: !GetAtt StorageStack.Outputs.ConversationsTableName
-    Export:
-      Name: !Sub '${AWS::StackName}-ConversationsTable'
 
-  MemoriesTable:
-    Description: Memories Table Name
-    Value: !GetAtt StorageStack.Outputs.MemoriesTableName
-    Export:
-      Name: !Sub '${AWS::StackName}-MemoriesTable'
+  ChatFunctionName:
+    Description: Chat handler Lambda function name
+    Value: !GetAtt ComputeStack.Outputs.ChatFunctionName
 
-  LongTermMemoryBucket:
-    Description: Long-term Memory Bucket Name
-    Value: !GetAtt StorageStack.Outputs.LongTermMemoryBucketName
-    Export:
-      Name: !Sub '${AWS::StackName}-LongTermMemoryBucket'
+  DocumentsBucketName:
+    Condition: IsRAGEnabled
+    Description: S3 bucket for documents (Phase 2)
+    Value: !GetAtt StorageStack.Outputs.DocumentsBucketName
 
-  # AI Outputs
   VectorSearchEndpoint:
-    Description: Vector Search Endpoint
-    Value: !GetAtt AIStack.Outputs.VectorSearchCollectionEndpoint
-    Export:
-      Name: !Sub '${AWS::StackName}-VectorSearchEndpoint'
+    Condition: IsRAGEnabled
+    Description: OpenSearch Serverless endpoint (Phase 2)
+    Value: !GetAtt AIStack.Outputs.VectorSearchEndpoint
 
-  VectorSearchDashboard:
-    Description: Vector Search Dashboard
-    Value: !GetAtt AIStack.Outputs.VectorSearchDashboardEndpoint
-    Export:
-      Name: !Sub '${AWS::StackName}-VectorSearchDashboard'
-
-  # Lambda Outputs
-  AgentFunctionName:
-    Description: Agent Lambda Function Name
-    Value: !GetAtt ComputeStack.Outputs.AgentFunctionName
-    Export:
-      Name: !Sub '${AWS::StackName}-AgentFunctionName'
-
-  # Quick Start Information
   QuickStartGuide:
-    Description: Quick Start Information
+    Description: Quick start guide
     Value: !Sub |
-      PAI Agent deployed successfully!
+      Personal AI Chatbot deployed successfully!
+
+      Environment: ${Environment}
+      RAG Enabled: ${EnableRAG}
 
       API Endpoint: ${ComputeStack.Outputs.ApiEndpoint}
 
-      Test the API:
+      Test the chatbot:
       curl -X POST ${ComputeStack.Outputs.ApiEndpoint}/chat \
         -H "Content-Type: application/json" \
-        -d '{"message": "Hello!", "conversation_id": "test-123"}'
+        -d '{"conversation_id": "test-123", "message": "Hello!"}'
 
       View logs:
-      aws logs tail /aws/lambda/${ComputeStack.Outputs.AgentFunctionName} --follow
+      aws logs tail /aws/lambda/${ComputeStack.Outputs.ChatFunctionName} --follow
 
-      Vector Search Dashboard:
-      ${AIStack.Outputs.VectorSearchDashboardEndpoint}
+      ${EnableRAG == "true" ? "Upload documents (RAG enabled):" : ""}
+      ${EnableRAG == "true" ? "aws s3 cp my_document.pdf s3://" + StorageStack.Outputs.DocumentsBucketName + "/" : ""}

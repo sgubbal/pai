@@ -1,631 +1,567 @@
-# PAI Agent Architecture
-
-Technical architecture documentation for the Personal AI Agent.
-
-## System Overview
-
-PAI is a serverless personal AI agent built on AWS, designed for cost-effectiveness, security, and scalability.
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                        Client Layer                          │
-│                  (Future: Web/Mobile App)                    │
-└────────────────────────┬─────────────────────────────────────┘
-                         │
-                         │ HTTPS
-                         ▼
-┌──────────────────────────────────────────────────────────────┐
-│                   API Gateway (HTTP API)                     │
-│                    - /chat (POST)                            │
-│                    - /search (POST)                          │
-│                    - /memory/* (GET)                         │
-└────────────────────────┬─────────────────────────────────────┘
-                         │
-                         │ Invoke
-                         ▼
-┌──────────────────────────────────────────────────────────────┐
-│                    Lambda Functions                          │
-│  ┌────────────┐  ┌────────────┐  ┌────────────┐            │
-│  │   Agent    │  │   Memory   │  │   Search   │            │
-│  │  Handler   │  │  Handler   │  │  Handler   │            │
-│  └──────┬─────┘  └──────┬─────┘  └──────┬─────┘            │
-│         │                │                │                  │
-└─────────┼────────────────┼────────────────┼──────────────────┘
-          │                │                │
-          │                │                │
-    ┌─────▼────────────────▼────────────────▼─────┐
-    │                                              │
-    │           Service Layer                      │
-    │  ┌──────────────┐  ┌──────────────┐         │
-    │  │  AI Service  │  │Memory Service│         │
-    │  │  (Bedrock)   │  │(DynamoDB/S3) │         │
-    │  └──────────────┘  └──────────────┘         │
-    │  ┌──────────────┐  ┌──────────────┐         │
-    │  │Vector Service│  │  Encryption  │         │
-    │  │ (OpenSearch) │  │(KMS Service) │         │
-    │  └──────────────┘  └──────────────┘         │
-    │                                              │
-    └─────────┬────────────────┬───────────────────┘
-              │                │
-    ┌─────────▼────────┐  ┌───▼──────────────┐
-    │                  │  │                   │
-    │  AWS Services    │  │  Storage Layer    │
-    │                  │  │                   │
-    │  ┌────────────┐  │  │  ┌────────────┐  │
-    │  │  Bedrock   │  │  │  │ DynamoDB   │  │
-    │  │  Claude 3  │  │  │  │ (Tables)   │  │
-    │  │  Titan     │  │  │  └────────────┘  │
-    │  └────────────┘  │  │  ┌────────────┐  │
-    │  ┌────────────┐  │  │  │     S3     │  │
-    │  │ OpenSearch │  │  │  │  (Bucket)  │  │
-    │  │ Serverless │  │  │  └────────────┘  │
-    │  └────────────┘  │  │  ┌────────────┐  │
-    │  ┌────────────┐  │  │  │    KMS     │  │
-    │  │    KMS     │  │  │  │   (Keys)   │  │
-    │  └────────────┘  │  │  └────────────┘  │
-    │                  │  │                   │
-    └──────────────────┘  └───────────────────┘
-```
-
-## Components
-
-### 1. API Gateway (HTTP API)
-
-**Purpose**: Entry point for all client requests
-
-**Features**:
-- HTTP API (cheaper than REST API)
-- CORS enabled for future web frontend
-- Throttling configured (10 req/s, 20 burst)
-- Direct Lambda proxy integration
-
-**Endpoints**:
-- `POST /chat`: Send messages to AI agent
-- `POST /search`: Semantic search across memories
-- `GET /memory/{id}`: Retrieve conversation history
-
-### 2. Lambda Functions
-
-#### Agent Lambda (`pai-agent-{env}`)
-
-**Purpose**: Main AI agent orchestrator
-
-**Responsibilities**:
-- Receive user messages
-- Manage conversation context
-- Query relevant memories
-- Call Bedrock for AI responses
-- Save conversation history
-- Store important exchanges in long-term memory
-
-**Configuration**:
-- Runtime: Python 3.11
-- Architecture: ARM64 (cost optimization)
-- Memory: 512 MB
-- Timeout: 60 seconds
-
-**Environment Variables**:
-- `CONVERSATIONS_TABLE`
-- `MEMORIES_TABLE`
-- `MEMORY_BUCKET`
-- `VECTOR_SEARCH_ENDPOINT`
-- `KMS_KEY_ID`
-- `AI_MODEL_ID`
-- `EMBEDDING_MODEL_ID`
-
-#### Memory Lambda (`pai-memory-{env}`)
-
-**Purpose**: Memory management operations
-
-**Responsibilities**:
-- Retrieve conversation history
-- List memories by category
-- Manage memory metadata
-
-**Configuration**:
-- Runtime: Python 3.11
-- Architecture: ARM64
-- Memory: 256 MB
-- Timeout: 30 seconds
-
-#### Search Lambda (`pai-search-{env}`)
-
-**Purpose**: Semantic search
-
-**Responsibilities**:
-- Generate query embeddings
-- Search vector database
-- Return ranked results
-
-**Configuration**:
-- Runtime: Python 3.11
-- Architecture: ARM64
-- Memory: 512 MB
-- Timeout: 30 seconds
-
-### 3. Storage Layer
-
-#### DynamoDB Tables
-
-**Conversations Table** (`pai-conversations-{env}`):
-- **Purpose**: Short-term conversation memory
-- **Schema**:
-  - `conversation_id` (HASH): Unique conversation identifier
-  - `timestamp` (RANGE): Message timestamp
-  - `message_id`: Unique message identifier
-  - `role`: 'user' or 'assistant'
-  - `content`: Message content (encrypted)
-  - `ttl`: Auto-deletion timestamp (7 days default)
-- **Features**:
-  - Point-in-time recovery enabled
-  - KMS encryption
-  - TTL enabled for automatic cleanup
-
-**Memories Table** (`pai-memories-{env}`):
-- **Purpose**: Long-term memory metadata
-- **Schema**:
-  - `memory_id` (HASH): Unique memory identifier
-  - `content`: Memory summary
-  - `category`: Memory category
-  - `created_at`: Creation timestamp
-  - `s3_key`: S3 key for full content
-  - `ttl`: Auto-deletion timestamp (365 days default)
-- **GSI**: `category-created_at-index`
-- **Features**:
-  - Point-in-time recovery enabled
-  - KMS encryption
-  - TTL enabled
-
-#### S3 Bucket
-
-**Long-term Memory Bucket** (`pai-long-term-memory-{account}-{env}`):
-- **Purpose**: Persistent storage for full memory content
-- **Features**:
-  - Versioning enabled
-  - KMS encryption
-  - Intelligent-Tiering lifecycle policy
-  - Public access blocked
-- **Structure**:
-  ```
-  s3://pai-long-term-memory-{account}-{env}/
-  └── memories/
-      ├── mem-{uuid}.json
-      └── mem-{uuid}.json
-  ```
-
-### 4. AI Services
-
-#### Amazon Bedrock
-
-**Models Used**:
-1. **Claude 3 Sonnet** (`anthropic.claude-3-sonnet-20240229-v1:0`)
-   - Purpose: Conversational AI
-   - Max tokens: 2048 (configurable)
-   - Context window: Up to 20 messages
-
-2. **Titan Embeddings V2** (`amazon.titan-embed-text-v2:0`)
-   - Purpose: Generate vector embeddings
-   - Dimension: 1024
-   - Use: Semantic search, memory indexing
-
-**Integration**:
-- Direct SDK integration (boto3)
-- No API keys required (IAM role-based)
-- Regional endpoints
-
-#### OpenSearch Serverless
-
-**Collection**: `pai-vectors-{env}`
-
-**Purpose**: Vector database for semantic search
-
-**Configuration**:
-- Type: VECTORSEARCH
-- Vector dimension: 1024
-- Algorithm: HNSW (Hierarchical Navigable Small World)
-- Similarity: Cosine similarity
-
-**Index Schema**:
-```json
-{
-  "memory_id": "keyword",
-  "content": "text",
-  "category": "keyword",
-  "created_at": "long",
-  "metadata": "object",
-  "embedding": {
-    "type": "knn_vector",
-    "dimension": 1024,
-    "method": {
-      "name": "hnsw",
-      "space_type": "cosinesimil",
-      "engine": "nmslib"
-    }
-  }
-}
-```
-
-### 5. Security
-
-#### KMS Encryption
-
-**Key**: `pai-encryption-{env}`
-
-**Purpose**: End-to-end encryption of sensitive data
-
-**Usage**:
-- Encrypt message content before DynamoDB storage
-- Encrypt memory content before S3 storage
-- Encrypt/decrypt operations via service layer
-
-**Features**:
-- Automatic key rotation enabled
-- AWS-owned CMK (Customer Master Key)
-- Regional key
-
-#### IAM Roles
-
-**Lambda Execution Role** (`pai-lambda-execution-role-{env}`):
-
-**Permissions**:
-- DynamoDB: Read/Write to PAI tables
-- S3: Read/Write to PAI buckets
-- KMS: Encrypt/Decrypt operations
-- Bedrock: InvokeModel for AI operations
-- OpenSearch: APIAccessAll for vector search
-- CloudWatch Logs: Write logs
-
-**Trust Policy**: Lambda service
-
-### 6. Service Layer (Python)
-
-#### AIService (`src/services/ai_service.py`)
-
-**Responsibilities**:
-- Interface with Bedrock models
-- Generate chat responses
-- Create vector embeddings
-
-**Key Methods**:
-- `chat()`: Send messages and get AI responses
-- `generate_embedding()`: Create vector embeddings
-- `batch_generate_embeddings()`: Bulk embedding generation
-
-#### MemoryService (`src/services/memory_service.py`)
-
-**Responsibilities**:
-- Manage conversations in DynamoDB
-- Store/retrieve memories from S3
-- Handle encryption/decryption
-
-**Key Methods**:
-- `save_message()`: Store message in short-term memory
-- `get_conversation()`: Retrieve conversation history
-- `save_memory()`: Store memory in long-term storage
-- `get_memory()`: Retrieve specific memory
-- `list_memories()`: List memories by category
-
-#### VectorService (`src/services/vector_service.py`)
-
-**Responsibilities**:
-- Manage OpenSearch index
-- Index memory vectors
-- Perform semantic search
-
-**Key Methods**:
-- `create_index()`: Initialize vector index
-- `index_memory()`: Add memory to vector database
-- `search()`: Semantic search for similar memories
-- `delete_memory()`: Remove memory from index
-
-#### EncryptionService (`src/services/encryption.py`)
-
-**Responsibilities**:
-- Encrypt/decrypt data using KMS
-- Manage encryption keys
-
-**Key Methods**:
-- `encrypt()`: Encrypt plaintext
-- `decrypt()`: Decrypt ciphertext
-- `generate_data_key()`: Create data encryption keys
-
-## Data Flow
-
-### 1. Chat Request Flow
-
-```
-1. User sends message → API Gateway
-2. API Gateway → Agent Lambda
-3. Agent Lambda:
-   a. Save user message to Conversations table (encrypted)
-   b. Retrieve conversation history from DynamoDB
-   c. Generate query embedding via Bedrock
-   d. Search for relevant memories in OpenSearch
-   e. Construct context with history + memories
-   f. Call Bedrock for AI response
-   g. Save AI response to Conversations table
-   h. Create memory of exchange
-   i. Generate embedding for memory
-   j. Save memory to S3 + DynamoDB
-   k. Index memory in OpenSearch
-4. Return response to user
-```
-
-### 2. Search Request Flow
-
-```
-1. User sends search query → API Gateway
-2. API Gateway → Search Lambda
-3. Search Lambda:
-   a. Generate query embedding via Bedrock
-   b. Query OpenSearch vector database
-   c. Retrieve matching memories
-   d. Rank by similarity score
-4. Return ranked results to user
-```
-
-### 3. Memory Retrieval Flow
-
-```
-1. User requests conversation → API Gateway
-2. API Gateway → Memory Lambda
-3. Memory Lambda:
-   a. Query Conversations table by ID
-   b. Decrypt message content
-   c. Sort by timestamp
-4. Return conversation history to user
-```
-
-## Scalability Considerations
-
-### Current Design (Single User)
-
-- No authentication required
-- Simple conversation ID system
-- Direct Lambda invocation
-
-### Future Multi-User Support
-
-**Required Changes**:
-1. Add Amazon Cognito for authentication
-2. Add user_id to all table partition keys
-3. Implement API authorization
-4. Add per-user rate limiting
-5. Implement user-specific memory isolation
-
-**Schema Changes**:
-```python
-# Conversations table
-HASH: user_id
-RANGE: conversation_id#timestamp
-
-# Memories table
-HASH: user_id
-RANGE: memory_id
-```
-
-## Performance Optimization
-
-### Lambda Cold Start Mitigation
-
-- Use ARM64 architecture (faster cold starts)
-- Optimize package size
-- Use Lambda layers for common dependencies
-- Consider provisioned concurrency for production
-
-### DynamoDB Optimization
-
-- Use on-demand billing (no capacity planning)
-- Enable DAX (DynamoDB Accelerator) if needed
-- Implement batch operations where possible
-- Use projections in GSI to reduce read costs
-
-### S3 Optimization
-
-- Enable Intelligent-Tiering
-- Use multipart upload for large objects
-- Implement lifecycle policies
-- Enable transfer acceleration if needed
-
-### Vector Search Optimization
-
-- Use appropriate k value for search
-- Filter by category to reduce search space
-- Use ef_search parameter tuning
-- Consider index optimization for large datasets
-
-## Monitoring and Observability
-
-### CloudWatch Metrics
-
-**Lambda**:
-- Invocations
-- Duration
-- Errors
-- Throttles
-
-**DynamoDB**:
-- Read/Write capacity units
-- Throttled requests
-- User errors
-
-**API Gateway**:
-- Request count
-- Latency
-- 4xx/5xx errors
-
-### Logging Strategy
-
-**Log Levels**:
-- ERROR: System errors, exceptions
-- INFO: Important events (message saved, search performed)
-- DEBUG: Detailed execution information
-
-**Structured Logging**:
-- JSON format for easy parsing
-- Include conversation_id, user_id, timestamp
-- Centralize with CloudWatch Logs Insights
-
-### Tracing
-
-**X-Ray Integration** (Future):
-- End-to-end request tracing
-- Performance bottleneck identification
-- Service map visualization
-
-## Disaster Recovery
-
-### Backup Strategy
-
-**DynamoDB**:
-- Point-in-time recovery enabled
-- Daily automated backups (AWS Backup)
-- 35-day retention
-
-**S3**:
-- Versioning enabled
-- Cross-region replication (optional)
-- Lifecycle policies for cost optimization
-
-### Recovery Procedures
-
-**Complete Stack Failure**:
-1. Redeploy CloudFormation stack
-2. Restore DynamoDB from backup
-3. S3 data persists (versioned)
-4. Rebuild OpenSearch index from S3
-
-**Data Corruption**:
-1. Use DynamoDB point-in-time recovery
-2. Restore specific S3 object versions
-3. Regenerate vector embeddings if needed
-
-## Cost Analysis
-
-### Monthly Cost Breakdown (Low Usage)
-
-| Service | Usage | Cost |
-|---------|-------|------|
-| Lambda | 10K invocations, 512MB, 10s avg | $1-2 |
-| DynamoDB | 1M reads, 100K writes | $1-2 |
-| S3 | 1GB storage, 10K requests | $0.50 |
-| OpenSearch | Serverless OCU | $5-10 |
-| Bedrock | 1M tokens (~500 conversations) | $5-15 |
-| KMS | 10K requests | $0.03 |
-| API Gateway | 10K requests | $0.01 |
-| **Total** | | **~$15-30/month** |
-
-### Cost Optimization Strategies
-
-1. **Use ARM64 Lambda**: 20% cost reduction
-2. **Optimize token usage**: Reduce context window when possible
-3. **TTL for old data**: Automatic cleanup reduces storage costs
-4. **Batch operations**: Reduce API calls
-5. **On-demand pricing**: Pay only for what you use
-
-## Security Best Practices
-
-### Data Protection
-
-- All data encrypted at rest (KMS)
-- All data encrypted in transit (HTTPS)
-- Encryption keys rotated automatically
-- S3 bucket policies enforce encryption
-
-### Access Control
-
-- IAM roles follow least-privilege principle
-- No hardcoded credentials
-- Service-to-service authentication via IAM
-- API throttling to prevent abuse
-
-### Network Security
-
-- OpenSearch network policy (public for MVP, VPC optional)
-- S3 public access blocked
-- API Gateway behind HTTPS
-
-### Compliance
-
-- GDPR-ready (user data deletion supported)
-- SOC 2 compliant AWS services
-- Audit trail via CloudTrail
-- Data residency control via regions
-
-## Deployment Architecture
-
-### CI/CD Pipeline
-
-```
-Developer → Git Push → GitHub Actions
-                           ↓
-                    [Test Stage]
-                     - Lint code
-                     - Run tests
-                     - Validate CFN
-                           ↓
-                   [Build Stage]
-                    - Package Lambdas
-                    - Create artifacts
-                           ↓
-                  [Deploy Stage]
-                   - Deploy CFN
-                   - Update Lambdas
-                   - Run smoke tests
-                           ↓
-                    AWS Environment
-```
-
-### Infrastructure as Code
-
-**CloudFormation Stacks**:
-1. **Security Stack**: KMS keys, IAM roles
-2. **Storage Stack**: DynamoDB tables, S3 buckets
-3. **AI Stack**: OpenSearch Serverless collection
-4. **Compute Stack**: Lambda functions, API Gateway
-
-**Benefits**:
-- Reproducible deployments
-- Version controlled infrastructure
-- Easy rollback
-- Multi-environment support
-
-## Future Enhancements
-
-### Planned Features
-
-1. **Frontend Application**
-   - React/Next.js web app
-   - Mobile app (React Native)
-   - Real-time updates via WebSocket
-
-2. **Multi-User Support**
-   - Cognito authentication
-   - User-specific memories
-   - Sharing and collaboration
-
-3. **Enhanced AI Capabilities**
-   - Multiple AI model support
-   - Custom model fine-tuning
-   - Function calling/tool use
-
-4. **Advanced Memory System**
-   - Automatic memory categorization
-   - Memory importance scoring
-   - Smart memory consolidation
-
-5. **Integration APIs**
-   - Calendar integration
-   - Email integration
-   - Third-party app connections
-
-### Scalability Roadmap
-
-**Phase 1** (Current): Single user, basic features
-**Phase 2**: Multi-user support, authentication
-**Phase 3**: Enterprise features, SSO, teams
-**Phase 4**: Platform features, developer API
+# Personal AI Chatbot Architecture
+
+## Overview
+A modular, serverless chatbot built on AWS that starts as a simple conversational AI (Phase 1) and extends to RAG (Retrieval Augmented Generation) capabilities (Phase 2).
+
+## Design Principles
+1. **Start Simple, Scale Smart**: MVP first, then add complexity
+2. **Modular**: Each component can be enabled/disabled via feature flags
+3. **Cost-Effective**: Serverless pay-per-use, ~$5-15/month for MVP
+4. **Secure**: End-to-end encryption with KMS
+5. **Scalable**: Auto-scaling serverless components
+6. **Extensible**: Easy to add new features
 
 ---
 
-This architecture provides a solid foundation for a cost-effective, secure, and scalable personal AI agent while maintaining simplicity and ease of deployment.
+## Phase 1: Simple Chatbot (MVP)
+
+### Architecture Diagram
+```
+User → API Gateway (HTTPS) → Lambda (chat-handler) → Bedrock (Claude)
+                                  ↓
+                             DynamoDB (conversations)
+                                  ↓
+                             KMS (encryption)
+```
+
+### Components
+
+#### 1. API Gateway (HTTP API)
+- **Endpoint**: `/chat` (POST)
+- **Features**: CORS enabled, throttling, HTTPS only
+- **Cost**: ~$0.50/month
+
+#### 2. Lambda Function (chat-handler)
+- **Runtime**: Python 3.12, ARM64
+- **Memory**: 512MB, Timeout: 30s
+- **Responsibilities**:
+  - Receive user messages
+  - Load conversation history (last 10 messages)
+  - Call Bedrock for AI response
+  - Save conversation to DynamoDB (encrypted)
+- **Cost**: ~$1-3/month
+
+#### 3. DynamoDB (conversations table)
+- **Schema**:
+  - `conversation_id` (HASH): UUID
+  - `timestamp` (RANGE): ISO timestamp
+  - `role`: 'user' or 'assistant'
+  - `content`: Message (encrypted at application layer)
+  - `ttl`: Auto-delete after 30 days
+- **Features**: On-demand billing, point-in-time recovery, KMS encryption
+- **Cost**: ~$1-2/month
+
+#### 4. Amazon Bedrock
+- **Model**: Claude 3.5 Sonnet v2
+- **Features**: Conversational AI, context awareness
+- **Cost**: ~$5-10/month (500-1000 messages)
+
+#### 5. KMS (Encryption)
+- **Key**: Customer-managed, auto-rotation enabled
+- **Usage**: Encrypt/decrypt message content
+- **Cost**: ~$1/month
+
+### Data Flow (Phase 1)
+```
+1. User: "What's the weather?"
+   ↓
+2. API Gateway → Lambda
+   ↓
+3. Lambda:
+   - Load last 10 messages from DynamoDB
+   - Prepare prompt with context
+   - Call Bedrock API
+   - Encrypt response
+   - Save to DynamoDB
+   ↓
+4. Return: "I don't have access to real-time weather..."
+```
+
+### Estimated Cost (Phase 1)
+| Service | Monthly Cost |
+|---------|-------------|
+| Lambda | $1-3 |
+| DynamoDB | $1-2 |
+| API Gateway | $0.50 |
+| Bedrock | $5-10 |
+| KMS | $1 |
+| **Total** | **$8.50-16.50** |
+
+---
+
+## Phase 2: RAG Extension
+
+### Architecture Diagram
+```
+User → API Gateway → Lambda (chat-handler) → Bedrock (Claude + Context)
+                          ↓                        ↑
+                     DynamoDB                 Retrieved Context
+                                                    |
+Document → S3 → Lambda (ingestion) → Bedrock (Embeddings)
+                                           ↓
+                                  OpenSearch Serverless
+                                           ↓
+                      Lambda (retrieval) ─────┘
+```
+
+### Additional Components
+
+#### 6. S3 Bucket (documents)
+- **Purpose**: Store user documents (PDF, TXT, MD)
+- **Features**: Versioning, KMS encryption, Intelligent-Tiering
+- **Cost**: ~$1/month
+
+#### 7. Lambda (ingestion-handler)
+- **Trigger**: S3 upload event
+- **Runtime**: Python 3.12, ARM64
+- **Memory**: 1024MB, Timeout: 5min
+- **Responsibilities**:
+  - Download document from S3
+  - Chunk into 512-token segments
+  - Generate embeddings via Bedrock
+  - Store vectors in OpenSearch
+- **Cost**: ~$2-3/month
+
+#### 8. Lambda (retrieval-handler)
+- **Runtime**: Python 3.12, ARM64
+- **Memory**: 512MB, Timeout: 30s
+- **Responsibilities**:
+  - Generate query embedding
+  - Search OpenSearch for top-5 relevant chunks
+  - Return context to chat-handler
+- **Cost**: ~$1-2/month
+
+#### 9. OpenSearch Serverless
+- **Collection**: `chatbot-vectors-{env}`
+- **Type**: Vector search
+- **Features**: Cosine similarity, HNSW algorithm
+- **Cost**: ~$10-20/month (2 OCUs minimum)
+
+#### 10. Bedrock Embeddings
+- **Model**: Titan Embeddings v2
+- **Dimension**: 1024
+- **Cost**: ~$2-5/month
+
+### Data Flow (Phase 2)
+
+#### Ingestion Flow
+```
+1. User uploads: "my_resume.pdf" → S3
+   ↓
+2. S3 Event → Lambda (ingestion)
+   ↓
+3. Lambda:
+   - Download PDF
+   - Extract text
+   - Chunk into segments
+   - For each chunk:
+     * Generate embedding via Bedrock
+     * Store in OpenSearch with metadata
+   ↓
+4. Document indexed and searchable
+```
+
+#### Retrieval Flow
+```
+1. User: "What programming languages do I know?"
+   ↓
+2. API Gateway → Lambda (chat)
+   ↓
+3. Lambda calls retrieval-handler:
+   - Generate query embedding
+   - Search OpenSearch
+   - Return top-5 chunks from resume
+   ↓
+4. Lambda (chat):
+   - Combine retrieved context + conversation history
+   - Call Bedrock with enhanced prompt
+   - Save response
+   ↓
+5. Return: "Based on your resume, you know Python, Java..."
+```
+
+### Estimated Cost (Phase 2)
+| Service | Monthly Cost |
+|---------|-------------|
+| Phase 1 Total | $8.50-16.50 |
+| S3 | $1 |
+| Lambda (ingestion) | $2-3 |
+| Lambda (retrieval) | $1-2 |
+| OpenSearch | $10-20 |
+| Bedrock Embeddings | $2-5 |
+| **Total** | **$25-47.50** |
+
+---
+
+## Security Architecture
+
+### Encryption
+- **At Rest**: KMS-encrypted DynamoDB, S3, OpenSearch
+- **In Transit**: HTTPS/TLS 1.3 for all API calls
+- **Application Layer**: Encrypt message content before storage
+
+### IAM Policies (Least Privilege)
+```yaml
+Lambda Execution Role:
+  - DynamoDB: PutItem, Query on chatbot tables
+  - S3: GetObject, PutObject on chatbot bucket
+  - KMS: Encrypt, Decrypt with chatbot key
+  - Bedrock: InvokeModel (Claude, Titan)
+  - OpenSearch: Write, Search (Phase 2)
+  - CloudWatch: PutLogEvents
+```
+
+### Authentication (Future)
+- API Key authentication (simple)
+- Cognito User Pools (multi-user)
+- JWT tokens for session management
+
+---
+
+## Infrastructure as Code
+
+### CloudFormation Stack Structure
+```
+infra/cloudformation/
+├── main.yaml              # Orchestrator (nested stacks)
+├── security.yaml          # KMS, IAM roles
+├── storage.yaml           # DynamoDB, S3
+├── compute.yaml           # Lambda, API Gateway
+└── ai.yaml                # OpenSearch (conditional)
+```
+
+### Feature Flags (Parameters)
+```yaml
+Parameters:
+  EnableRAG:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+
+  Environment:
+    Type: String
+    Default: "dev"
+    AllowedValues: ["dev", "staging", "prod"]
+```
+
+### Conditional Resources
+```yaml
+Conditions:
+  IsRAGEnabled: !Equals [!Ref EnableRAG, "true"]
+
+Resources:
+  OpenSearchCollection:
+    Type: AWS::OpenSearchServerless::Collection
+    Condition: IsRAGEnabled  # Only created if EnableRAG=true
+```
+
+---
+
+## Application Code Structure
+
+```
+src/
+├── chatbot/               # Phase 1
+│   ├── handler.py         # Lambda entry point
+│   ├── llm_service.py     # Bedrock integration
+│   ├── conversation_service.py  # DynamoDB operations
+│   └── models.py          # Pydantic data models
+│
+├── rag/                   # Phase 2 (optional)
+│   ├── ingestion_handler.py    # Document processing
+│   ├── retrieval_handler.py    # Vector search
+│   ├── embedding_service.py    # Bedrock embeddings
+│   └── document_processor.py   # Chunking logic
+│
+└── shared/
+    ├── encryption.py      # KMS encrypt/decrypt
+    ├── config.py          # Environment variables
+    └── logger.py          # Structured logging
+```
+
+---
+
+## Deployment Strategy
+
+### CI/CD Pipeline (GitHub Actions)
+```
+Push to main → GitHub Actions
+    ↓
+[Validate]
+ - Lint Python (ruff)
+ - Type check (mypy)
+ - Validate CloudFormation
+    ↓
+[Test]
+ - Unit tests (pytest)
+ - Integration tests (moto)
+    ↓
+[Build]
+ - Package Lambda functions
+ - Install dependencies (ARM64)
+    ↓
+[Deploy]
+ - Deploy CloudFormation
+ - Update Lambda code
+ - Run smoke tests
+```
+
+### Deployment Scripts
+```bash
+scripts/
+├── deploy.sh              # Deploy infrastructure
+├── package-lambdas.sh     # Build and upload Lambda code
+├── cleanup.sh             # Destroy stack
+├── test.sh                # Run smoke tests
+└── enable-rag.sh          # Enable RAG (Phase 2)
+```
+
+### Deployment Commands
+```bash
+# Phase 1: Deploy simple chatbot
+./scripts/deploy.sh dev
+
+# Package and deploy Lambda code
+./scripts/package-lambdas.sh dev
+
+# Test deployment
+./scripts/test.sh dev
+
+# Phase 2: Enable RAG
+./scripts/enable-rag.sh dev
+```
+
+---
+
+## Modularity & Scalability
+
+### How to Enable RAG
+```bash
+# Option 1: CLI
+aws cloudformation update-stack \
+  --stack-name chatbot-dev \
+  --parameters ParameterKey=EnableRAG,ParameterValue=true
+
+# Option 2: Script
+./scripts/enable-rag.sh dev
+
+# Option 3: Update parameter in GitHub Actions
+# Edit .github/workflows/deploy.yaml
+# Change: EnableRAG: "true"
+```
+
+### Scaling Considerations
+
+#### Current (Single User)
+- No authentication
+- Simple conversation management
+- Direct Lambda invocation
+
+#### Future (Multi-User)
+**Changes Needed**:
+1. Add Cognito User Pools
+2. Update DynamoDB schema:
+   ```
+   HASH: user_id
+   RANGE: conversation_id#timestamp
+   ```
+3. Add API authorization
+4. Implement per-user rate limiting
+5. Isolate user data (S3 prefixes, DynamoDB filters)
+
+---
+
+## Monitoring & Observability
+
+### CloudWatch Dashboards
+```
+- Lambda invocations, errors, duration
+- DynamoDB read/write capacity
+- API Gateway 4xx/5xx errors
+- Bedrock token usage
+- OpenSearch query performance
+```
+
+### Alarms
+```yaml
+HighErrorRate:
+  Metric: Lambda Errors
+  Threshold: > 5%
+  Action: Email notification
+
+HighLatency:
+  Metric: API Gateway Latency
+  Threshold: > 2 seconds
+  Action: Email notification
+
+HighCost:
+  Metric: Estimated Charges
+  Threshold: > $50
+  Action: Email notification
+```
+
+### Logging Strategy
+```python
+# Structured JSON logs
+{
+  "timestamp": "2025-10-22T10:30:00Z",
+  "level": "INFO",
+  "conversation_id": "uuid-1234",
+  "event": "message_sent",
+  "duration_ms": 1250,
+  "bedrock_tokens": 450
+}
+```
+
+---
+
+## Testing Strategy
+
+### Unit Tests
+```python
+tests/
+├── test_llm_service.py
+├── test_conversation_service.py
+├── test_encryption.py
+└── test_rag_retrieval.py
+```
+
+### Integration Tests (moto)
+```python
+# Mock AWS services
+@mock_dynamodb
+@mock_s3
+@mock_bedrock
+def test_end_to_end_chat():
+    # Test complete chat flow
+    pass
+```
+
+### Smoke Tests
+```bash
+# Test deployed endpoints
+curl -X POST https://api.example.com/chat \
+  -H "Content-Type: application/json" \
+  -d '{"conversation_id": "test", "message": "Hello"}'
+```
+
+---
+
+## Migration Path: Phase 1 → Phase 2
+
+### Step-by-Step
+1. **Deploy Phase 1** (simple chatbot)
+   ```bash
+   ./scripts/deploy.sh dev
+   ```
+
+2. **Test and validate** MVP functionality
+   ```bash
+   ./scripts/test.sh dev
+   ```
+
+3. **Enable RAG** when ready
+   ```bash
+   ./scripts/enable-rag.sh dev
+   ```
+
+4. **Upload documents**
+   ```bash
+   aws s3 cp my_docs/ s3://chatbot-docs-dev/ --recursive
+   ```
+
+5. **Test RAG** functionality
+   ```bash
+   curl -X POST https://api.example.com/chat \
+     -d '{"message": "What documents do I have?"}'
+   ```
+
+### Zero Downtime
+- CloudFormation updates are rolling
+- Lambda versions ensure no disruption
+- DynamoDB is always available
+
+---
+
+## Future Enhancements
+
+### Short Term
+- [ ] Streaming responses (Server-Sent Events)
+- [ ] Conversation export (JSON/PDF)
+- [ ] Multi-turn context management
+- [ ] Rate limiting per IP
+
+### Medium Term
+- [ ] Web UI (React + S3 + CloudFront)
+- [ ] API key management
+- [ ] Usage analytics dashboard
+- [ ] Document format support (DOCX, images)
+
+### Long Term
+- [ ] Multi-user with Cognito
+- [ ] Voice interface (Transcribe + Polly)
+- [ ] Multi-modal support (images, video)
+- [ ] Fine-tuned models
+- [ ] GraphRAG implementation
+
+---
+
+## Repository Structure
+
+```
+/
+├── .github/
+│   └── workflows/
+│       └── deploy.yaml          # CI/CD pipeline
+├── infra/
+│   └── cloudformation/
+│       ├── main.yaml            # Stack orchestrator
+│       ├── security.yaml        # KMS, IAM
+│       ├── storage.yaml         # DynamoDB, S3
+│       ├── compute.yaml         # Lambda, API Gateway
+│       └── ai.yaml              # OpenSearch (conditional)
+├── src/
+│   ├── chatbot/
+│   │   ├── handler.py           # Chat Lambda
+│   │   ├── llm_service.py       # Bedrock integration
+│   │   ├── conversation_service.py
+│   │   └── models.py
+│   ├── rag/
+│   │   ├── ingestion_handler.py
+│   │   ├── retrieval_handler.py
+│   │   ├── embedding_service.py
+│   │   └── document_processor.py
+│   └── shared/
+│       ├── encryption.py
+│       ├── config.py
+│       └── logger.py
+├── scripts/
+│   ├── deploy.sh
+│   ├── package-lambdas.sh
+│   ├── cleanup.sh
+│   ├── test.sh
+│   └── enable-rag.sh
+├── tests/
+│   ├── unit/
+│   └── integration/
+├── requirements.txt
+├── requirements-dev.txt
+├── README.md
+├── ARCHITECTURE.md
+├── DEPLOYMENT.md
+└── .gitignore
+```
+
+---
+
+## Conclusion
+
+This architecture provides:
+✅ **Simple start**: Deploy a working chatbot in < 15 minutes
+✅ **Easy extension**: Enable RAG with one command
+✅ **Cost-effective**: ~$10/month for MVP, ~$30/month with RAG
+✅ **Secure**: End-to-end encryption, least-privilege IAM
+✅ **Scalable**: Serverless auto-scaling
+✅ **Production-ready**: CI/CD, monitoring, testing included
+
+Perfect for a personal AI chatbot that grows with your needs.
