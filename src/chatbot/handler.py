@@ -10,14 +10,27 @@ from typing import Dict, Any
 import boto3
 from botocore.exceptions import ClientError
 
-# Initialize AWS clients
-dynamodb = boto3.resource('dynamodb')
-bedrock = boto3.client('bedrock-runtime')
-
 # Environment variables
 TABLE_NAME = os.environ.get('CONVERSATIONS_TABLE')
 MODEL_ID = os.environ.get('AI_MODEL_ID', 'anthropic.claude-3-5-sonnet-20241022-v2:0')
 ENVIRONMENT = os.environ.get('ENVIRONMENT', 'dev')
+AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
+AWS_ACCESS_KEY_ID = os.environ.get('AWS_ACCESS_KEY_ID')
+AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY')
+
+# Initialize AWS clients with explicit credentials
+dynamodb = boto3.resource(
+    'dynamodb',
+    region_name=AWS_REGION,
+    aws_access_key_id=AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY
+)
+bedrock = boto3.client(
+    'bedrock-runtime',
+    region_name=AWS_REGION,
+    aws_access_key_id=AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY
+)
 
 # Constants
 MAX_HISTORY_MESSAGES = 10

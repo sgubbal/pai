@@ -1,5 +1,5 @@
 """
-Configuration management for PAI Agent
+Configuration management for PAI Agent - Phase 1 MVP
 """
 import os
 from typing import Optional
@@ -10,41 +10,21 @@ load_dotenv()
 
 
 class Config:
-    """Application configuration"""
+    """Application configuration for Phase 1"""
 
     # AWS Configuration
     AWS_REGION: str = os.getenv('AWS_REGION', 'us-east-1')
-    AWS_ACCOUNT_ID: Optional[str] = os.getenv('AWS_ACCOUNT_ID')
+    AWS_ACCESS_KEY_ID: Optional[str] = os.getenv('AWS_ACCESS_KEY_ID')
+    AWS_SECRET_ACCESS_KEY: Optional[str] = os.getenv('AWS_SECRET_ACCESS_KEY')
 
     # Environment
     ENVIRONMENT: str = os.getenv('ENVIRONMENT', 'dev')
 
-    # DynamoDB Tables
+    # DynamoDB Table for Phase 1
     CONVERSATIONS_TABLE: str = os.getenv('CONVERSATIONS_TABLE', 'pai-conversations-dev')
-    MEMORIES_TABLE: str = os.getenv('MEMORIES_TABLE', 'pai-memories-dev')
 
-    # S3 Buckets
-    MEMORY_BUCKET: str = os.getenv('MEMORY_BUCKET', 'pai-long-term-memory')
-
-    # KMS
-    KMS_KEY_ID: Optional[str] = os.getenv('KMS_KEY_ID')
-
-    # AI Models
+    # AI Model for Phase 1
     AI_MODEL_ID: str = os.getenv('AI_MODEL_ID', 'anthropic.claude-3-sonnet-20240229-v1:0')
-    EMBEDDING_MODEL_ID: str = os.getenv('EMBEDDING_MODEL_ID', 'amazon.titan-embed-text-v2:0')
-
-    # Vector Search
-    VECTOR_SEARCH_ENDPOINT: Optional[str] = os.getenv('VECTOR_SEARCH_ENDPOINT')
-    OPENSEARCH_INDEX_NAME: str = os.getenv('OPENSEARCH_INDEX_NAME', 'pai-memories')
-    VECTOR_DIMENSION: int = int(os.getenv('VECTOR_DIMENSION', '1024'))
-
-    # Memory Configuration
-    SHORT_TERM_RETENTION_DAYS: int = int(os.getenv('SHORT_TERM_RETENTION_DAYS', '7'))
-    LONG_TERM_RETENTION_DAYS: int = int(os.getenv('LONG_TERM_RETENTION_DAYS', '365'))
-
-    # API Configuration
-    API_THROTTLE_RATE: int = int(os.getenv('API_THROTTLE_RATE', '10'))
-    API_THROTTLE_BURST: int = int(os.getenv('API_THROTTLE_BURST', '20'))
 
     @classmethod
     def validate(cls) -> bool:
@@ -59,8 +39,8 @@ class Config:
         """
         required_fields = [
             'CONVERSATIONS_TABLE',
-            'MEMORIES_TABLE',
-            'MEMORY_BUCKET',
+            'AWS_ACCESS_KEY_ID',
+            'AWS_SECRET_ACCESS_KEY'
         ]
 
         missing = [field for field in required_fields if not getattr(cls, field)]
