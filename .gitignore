@@ -1,12 +1,10 @@
-# Python
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
+
+# Distribution / packaging
 .Python
-env/
-venv/
-ENV/
 build/
 develop-eggs/
 dist/
@@ -23,22 +21,11 @@ wheels/
 .installed.cfg
 *.egg
 
-# AWS
-.aws-sam/
-samconfig.toml
-*.zip
-lambda-packages/
-
-# Environment and secrets
-.env
-.env.local
-*.pem
-*.key
-
-# CloudFormation
-packaged-*.yaml
-outputs.json
-output/
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
 
 # IDE
 .vscode/
@@ -47,26 +34,30 @@ output/
 *.swo
 *~
 
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-logs/
-
 # Testing
 .pytest_cache/
 .coverage
 htmlcov/
 .tox/
-tests/__pycache__/
 
-# Temporary files
-tmp/
-temp/
-.cache/
+# Environment variables
+.env
+.env.local
 
-# Node (for any tooling that might exist)
-node_modules/
-package-lock.json
+# AWS
+*.pem
+*.key
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.zip
+build/
+
+# CloudFormation
+packaged-*.yaml

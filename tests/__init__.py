@@ -1,1 +1,1 @@
-"""Test suite for PAI Agent"""
+# Tests package

@@ -1,102 +1,117 @@
 #!/bin/bash
+
+# Script to deploy PAI chatbot infrastructure
 set -e
 
-# Personal AI Chatbot Deployment Script
-
-# Colors
+# Colors for output
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
 
-# Parameters
+# Default values
 ENVIRONMENT=${1:-dev}
-ENABLE_RAG=${2:-false}
-STACK_NAME="chatbot-${ENVIRONMENT}"
+STACK_NAME="pai-chatbot-${ENVIRONMENT}"
 REGION=${AWS_REGION:-us-east-1}
-BUCKET_NAME="chatbot-cfn-artifacts-${ENVIRONMENT}"
 
-echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}Personal AI Chatbot Deployment${NC}"
-echo -e "${GREEN}========================================${NC}"
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+BUILD_DIR="$PROJECT_ROOT/build"
+TEMPLATE_DIR="$PROJECT_ROOT/infrastructure/templates"
+PARAMS_FILE="$PROJECT_ROOT/infrastructure/parameters/${ENVIRONMENT}.json"
+
+echo -e "${YELLOW}========================================${NC}"
+echo -e "${YELLOW}PAI Chatbot Deployment${NC}"
+echo -e "${YELLOW}========================================${NC}"
 echo "Environment: $ENVIRONMENT"
 echo "Stack Name: $STACK_NAME"
 echo "Region: $REGION"
-echo "Enable RAG: $ENABLE_RAG"
-echo ""
+echo -e "${YELLOW}========================================${NC}"
 
-###################
-# Step 1: Validate Templates
-###################
-echo -e "${YELLOW}Step 1: Validating CloudFormation templates...${NC}"
-
-aws cloudformation validate-template \
-    --template-body file://infra/cloudformation/main.yaml \
-    --region $REGION > /dev/null
-
-echo -e "${GREEN}✓ Templates validated${NC}"
-
-###################
-# Step 2: Create S3 Bucket for Artifacts
-###################
-echo ""
-echo -e "${YELLOW}Step 2: Creating S3 bucket for CFN artifacts...${NC}"
-
-if aws s3 ls "s3://${BUCKET_NAME}" 2>&1 | grep -q 'NoSuchBucket'; then
-    aws s3 mb "s3://${BUCKET_NAME}" --region $REGION
-    echo -e "${GREEN}✓ Bucket created${NC}"
-else
-    echo "Using existing bucket: ${BUCKET_NAME}"
+# Check if parameter file exists
+if [ ! -f "$PARAMS_FILE" ]; then
+    echo -e "${RED}Error: Parameter file not found: $PARAMS_FILE${NC}"
+    exit 1
 fi
 
-###################
-# Step 3: Package Templates
-###################
-echo ""
-echo -e "${YELLOW}Step 3: Packaging CloudFormation templates...${NC}"
+# Read S3 bucket name from parameters
+S3_BUCKET=$(jq -r '.[] | select(.ParameterKey=="S3BucketName") | .ParameterValue' "$PARAMS_FILE")
 
-aws cloudformation package \
-    --template-file infra/cloudformation/main.yaml \
-    --s3-bucket $BUCKET_NAME \
-    --output-template-file /tmp/packaged-template.yaml \
-    --region $REGION
+if [ "$S3_BUCKET" == "REPLACE_WITH_YOUR_S3_BUCKET" ] || [ -z "$S3_BUCKET" ]; then
+    echo -e "${RED}Error: S3 bucket name not configured in $PARAMS_FILE${NC}"
+    echo "Please update the S3BucketName parameter"
+    exit 1
+fi
 
-echo -e "${GREEN}✓ Templates packaged${NC}"
+# Check if API key is configured
+API_KEY=$(jq -r '.[] | select(.ParameterKey=="ApiKeyValue") | .ParameterValue' "$PARAMS_FILE")
+if [ "$API_KEY" == "REPLACE_WITH_YOUR_API_KEY" ] || [ -z "$API_KEY" ]; then
+    echo -e "${RED}Error: API key not configured in $PARAMS_FILE${NC}"
+    echo "Please update the ApiKeyValue parameter"
+    exit 1
+fi
 
-###################
-# Step 4: Deploy Stack
-###################
-echo ""
-echo -e "${YELLOW}Step 4: Deploying CloudFormation stack...${NC}"
+# Create S3 bucket if it doesn't exist
+echo -e "${YELLOW}Checking S3 bucket...${NC}"
+if ! aws s3 ls "s3://${S3_BUCKET}" 2>/dev/null; then
+    echo -e "${YELLOW}Creating S3 bucket: ${S3_BUCKET}${NC}"
+    aws s3 mb "s3://${S3_BUCKET}" --region "$REGION"
 
+    # Enable versioning
+    aws s3api put-bucket-versioning \
+        --bucket "${S3_BUCKET}" \
+        --versioning-configuration Status=Enabled
+else
+    echo -e "${GREEN}S3 bucket exists: ${S3_BUCKET}${NC}"
+fi
+
+# Package Lambda functions
+echo -e "${YELLOW}Packaging Lambda functions...${NC}"
+bash "$SCRIPT_DIR/package-lambdas.sh"
+
+# Upload Lambda packages to S3
+echo -e "${YELLOW}Uploading Lambda packages to S3...${NC}"
+aws s3 cp "$BUILD_DIR/layers/dependencies.zip" "s3://${S3_BUCKET}/layers/dependencies.zip"
+aws s3 cp "$BUILD_DIR/functions/chatbot.zip" "s3://${S3_BUCKET}/functions/chatbot.zip"
+aws s3 cp "$BUILD_DIR/functions/authorizer.zip" "s3://${S3_BUCKET}/functions/authorizer.zip"
+echo -e "${GREEN}Lambda packages uploaded${NC}"
+
+# Upload CloudFormation templates to S3
+echo -e "${YELLOW}Uploading CloudFormation templates to S3...${NC}"
+aws s3 cp "$TEMPLATE_DIR/" "s3://${S3_BUCKET}/templates/" --recursive --exclude "*" --include "*.yaml"
+echo -e "${GREEN}Templates uploaded${NC}"
+
+# Deploy CloudFormation stack
+echo -e "${YELLOW}Deploying CloudFormation stack...${NC}"
 aws cloudformation deploy \
-    --template-file /tmp/packaged-template.yaml \
-    --stack-name $STACK_NAME \
-    --parameter-overrides \
-        Environment=$ENVIRONMENT \
-        EnableRAG=$ENABLE_RAG \
+    --template-file "$TEMPLATE_DIR/main.yaml" \
+    --stack-name "$STACK_NAME" \
+    --parameter-overrides file://"$PARAMS_FILE" \
     --capabilities CAPABILITY_NAMED_IAM \
-    --region $REGION
+    --region "$REGION" \
+    --no-fail-on-empty-changeset
 
-echo -e "${GREEN}✓ Stack deployment completed${NC}"
+# Get stack outputs
+echo -e "${YELLOW}Retrieving stack outputs...${NC}"
+API_ENDPOINT=$(aws cloudformation describe-stacks \
+    --stack-name "$STACK_NAME" \
+    --region "$REGION" \
+    --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' \
+    --output text)
 
-###################
-# Step 5: Get Outputs
-###################
-echo ""
-echo -e "${YELLOW}Step 5: Getting stack outputs...${NC}"
-
-aws cloudformation describe-stacks \
-    --stack-name $STACK_NAME \
-    --region $REGION \
-    --query 'Stacks[0].Outputs[?OutputKey==`QuickStartGuide`].OutputValue' \
-    --output text
-
-echo ""
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}Deployment Complete!${NC}"
 echo -e "${GREEN}========================================${NC}"
+echo "API Endpoint: $API_ENDPOINT"
 echo ""
 echo "Next steps:"
-echo "1. Deploy Lambda code: ./scripts/package-lambdas.sh $ENVIRONMENT"
-echo "2. Test the API: ./scripts/test.sh $ENVIRONMENT"
+echo "1. Test the API using:"
+echo "   curl -X POST $API_ENDPOINT/chat \\"
+echo "     -H 'Authorization: Bearer YOUR_API_KEY' \\"
+echo "     -H 'Content-Type: application/json' \\"
+echo "     -d '{\"message\": \"Hello, how are you?\"}'"
 echo ""
+echo "2. View logs:"
+echo "   aws logs tail /aws/lambda/pai-chatbot-${ENVIRONMENT} --follow"
+echo -e "${GREEN}========================================${NC}"

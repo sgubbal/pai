@@ -1,0 +1,128 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'PAI - Compute Resources (Lambda Functions)'
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name
+
+  S3BucketName:
+    Type: String
+    Description: S3 bucket name for Lambda deployment packages
+
+  ConversationsTable:
+    Type: String
+    Description: DynamoDB conversations table name
+
+  KMSKeyId:
+    Type: String
+    Description: KMS key ID for encryption
+
+  ApiKeySecretArn:
+    Type: String
+    Description: Secrets Manager ARN for API key
+
+  ChatbotLambdaRoleArn:
+    Type: String
+    Description: IAM role ARN for chatbot Lambda
+
+  AuthorizerLambdaRoleArn:
+    Type: String
+    Description: IAM role ARN for authorizer Lambda
+
+Resources:
+  # Lambda Layer for shared dependencies
+  SharedDependenciesLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: !Sub 'pai-shared-dependencies-${Environment}'
+      Description: Shared dependencies for PAI Lambda functions
+      Content:
+        S3Bucket: !Ref S3BucketName
+        S3Key: layers/dependencies.zip
+      CompatibleRuntimes:
+        - python3.11
+        - python3.12
+
+  # Chatbot Lambda Function
+  ChatbotFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'pai-chatbot-${Environment}'
+      Runtime: python3.12
+      Handler: src.chatbot.handler.lambda_handler
+      Role: !Ref ChatbotLambdaRoleArn
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: functions/chatbot.zip
+      Layers:
+        - !Ref SharedDependenciesLayer
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          CONVERSATIONS_TABLE: !Ref ConversationsTable
+          KMS_KEY_ID: !Ref KMSKeyId
+          LOG_LEVEL: INFO
+      Timeout: 60
+      MemorySize: 512
+      ReservedConcurrentExecutions: 10
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: PAI
+
+  # Chatbot Lambda Log Group
+  ChatbotLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/pai-chatbot-${Environment}'
+      RetentionInDays: 14
+
+  # Authorizer Lambda Function
+  AuthorizerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'pai-authorizer-${Environment}'
+      Runtime: python3.12
+      Handler: src.authorizer.handler.lambda_handler
+      Role: !Ref AuthorizerLambdaRoleArn
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: functions/authorizer.zip
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          API_KEY_SECRET_ARN: !Ref ApiKeySecretArn
+          LOG_LEVEL: INFO
+      Timeout: 10
+      MemorySize: 256
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: PAI
+
+  # Authorizer Lambda Log Group
+  AuthorizerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/pai-authorizer-${Environment}'
+      RetentionInDays: 14
+
+Outputs:
+  ChatbotLambdaArn:
+    Description: Chatbot Lambda function ARN
+    Value: !GetAtt ChatbotFunction.Arn
+
+  ChatbotLambdaName:
+    Description: Chatbot Lambda function name
+    Value: !Ref ChatbotFunction
+
+  AuthorizerLambdaArn:
+    Description: Authorizer Lambda function ARN
+    Value: !GetAtt AuthorizerFunction.Arn
+
+  AuthorizerLambdaName:
+    Description: Authorizer Lambda function name
+    Value: !Ref AuthorizerFunction

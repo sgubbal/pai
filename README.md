@@ -1,350 +1,533 @@
-# Personal AI Chatbot
+# PAI - Personal AI Chatbot
 
-> A modular, cost-effective serverless chatbot built on AWS that starts simple (Phase 1) and extends to RAG (Phase 2)
+A serverless, cost-effective, and secure personal AI chatbot built on AWS with end-to-end encryption. Built with a modular architecture that can scale from a simple chatbot to a RAG (Retrieval-Augmented Generation) based LLM system.
 
-[![Deploy](https://github.com/yourusername/pai/workflows/Deploy%20Chatbot/badge.svg)](https://github.com/yourusername/pai/actions)
+## Features
 
-## Overview
-
-A personal AI chatbot MVP built with:
-- ✅ **Simple Start**: Deploy a working chatbot in < 15 minutes
-- ✅ **Easy Extension**: Enable RAG with one parameter
-- ✅ **Cost-Effective**: ~$10/month for MVP, ~$30/month with RAG
-- ✅ **Secure**: End-to-end encryption with KMS
-- ✅ **Serverless**: Auto-scaling, pay-per-use
-- ✅ **Production-Ready**: CI/CD, monitoring, testing included
-
-## Quick Start
-
-### Prerequisites
-- AWS Account with Bedrock access
-- AWS CLI v2+ configured
-- Python 3.12+
-- Bash shell
-
-### Deploy Phase 1 (Simple Chatbot)
-
-```bash
-# 1. Clone repository
-git clone https://github.com/yourusername/pai.git
-cd pai
-
-# 2. Deploy infrastructure
-./scripts/deploy.sh dev
-
-# 3. Deploy Lambda code
-./scripts/package-lambdas.sh dev
-
-# 4. Test your chatbot
-./scripts/test.sh dev
-```
-
-That's it! Your chatbot is live. 🎉
-
-### Test the API
-
-```bash
-# Get your API endpoint
-export API_ENDPOINT=$(aws cloudformation describe-stacks \
-  --stack-name chatbot-dev \
-  --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' \
-  --output text)
-
-# Send a message
-curl -X POST "${API_ENDPOINT}/chat" \
-  -H "Content-Type: application/json" \
-  -d '{"conversation_id": "my-chat", "message": "Hello! Tell me a joke."}'
-```
+- **Serverless Architecture**: 100% serverless using AWS Lambda, API Gateway, and DynamoDB
+- **Cost-Effective**: Pay-per-use pricing with auto-scaling
+- **End-to-End Encryption**: KMS-based encryption for conversation data
+- **Modular Design**: Easy to extend and scale
+- **CI/CD Ready**: GitHub Actions for automated deployments
+- **Multi-Environment**: Separate dev and prod environments
+- **API Key Authentication**: Simple and secure API access
+- **Conversation History**: Persistent conversation storage with TTL
+- **RAG-Ready**: Architecture designed to easily extend to RAG capabilities
 
 ## Architecture
 
-### Phase 1: Simple Chatbot (MVP)
+### Current Architecture (Phase 1: Basic Chatbot)
 
 ```
-User → API Gateway → Lambda → Bedrock (Claude)
-                       ↓
-                   DynamoDB
+┌─────────────┐
+│   Client    │
+└──────┬──────┘
+       │
+       │ HTTPS + API Key
+       │
+┌──────▼──────────────────────────────────────────────┐
+│            API Gateway (REST API)                    │
+│  ┌────────────────────────────────────────────┐    │
+│  │        Lambda Authorizer                   │    │
+│  │  (API Key Validation via Secrets Manager)  │    │
+│  └────────────────────────────────────────────┘    │
+└──────┬──────────────────────────────────────────────┘
+       │
+       │
+┌──────▼──────────────────────────────────────────────┐
+│         Chatbot Lambda Function                      │
+│  ┌─────────────────────────────────────────────┐   │
+│  │  • Request Parsing                          │   │
+│  │  • Conversation Management                  │   │
+│  │  • Bedrock Integration                      │   │
+│  │  • Response Formatting                      │   │
+│  └─────────────────────────────────────────────┘   │
+└───┬─────────────────┬──────────────────┬───────────┘
+    │                 │                  │
+    │                 │                  │
+┌───▼──────┐   ┌─────▼────────┐   ┌────▼──────────┐
+│   KMS    │   │   DynamoDB   │   │    Bedrock    │
+│ (Encrypt)│   │(Conversations)│   │ (Claude 3.5)  │
+└──────────┘   └──────────────┘   └───────────────┘
 ```
 
-**Components:**
-- **API Gateway**: HTTP API with `/chat` endpoint
-- **Lambda**: Chat handler (Python 3.12, ARM64)
-- **DynamoDB**: Conversation history (auto-expires after 30 days)
-- **Bedrock**: Claude 3.5 Sonnet v2
-- **KMS**: Encryption at rest
-
-**Monthly Cost**: ~$8-16
-
-### Phase 2: RAG Extension
+### Future Architecture (Phase 2: RAG Extension)
 
 ```
-Documents → S3 → Lambda (Ingestion) → Bedrock (Embeddings)
-                                            ↓
-                                   OpenSearch Serverless
-                                            ↓
-User → API Gateway → Lambda (Chat) → Bedrock + Context
-                       ↓
-                   DynamoDB
+┌─────────────┐
+│   Client    │
+└──────┬──────┘
+       │
+┌──────▼──────────────────────────────────────────────┐
+│            API Gateway (REST API)                    │
+│   /chat  |  /upload  |  /conversations              │
+└──────┬────────────┬─────────────────────────────────┘
+       │            │
+       │            │
+┌──────▼─────┐  ┌──▼────────────────┐
+│  Chatbot   │  │  Document Ingestion│
+│  Lambda    │  │  Lambda            │
+└───┬────┬───┘  └──┬────────────────┘
+    │    │         │
+    │    │         │
+┌───▼────▼─────────▼─────────────────────┐
+│        Aurora Serverless v2             │
+│         (PostgreSQL + pgvector)         │
+│  • Document Embeddings                  │
+│  • Vector Similarity Search             │
+└─────────────────────────────────────────┘
 ```
 
-**Additional Components:**
-- **S3**: Document storage
-- **Lambda (Ingestion)**: Process and embed documents
-- **OpenSearch**: Vector search
-- **Bedrock Embeddings**: Titan Embeddings v2
+## Technology Stack
 
-**Monthly Cost**: ~$25-48
+### Compute
+- **AWS Lambda**: Serverless compute (Python 3.12)
+- **Amazon Bedrock**: LLM service (Claude 3.5 Sonnet)
 
-## Enable RAG (Phase 2)
+### Storage
+- **DynamoDB**: Conversation history storage
+- **S3**: Lambda deployment packages and future document storage
+- **Aurora Serverless v2** (Future): Vector database with pgvector
 
-When you're ready to add RAG capabilities:
+### Security
+- **AWS KMS**: End-to-end encryption
+- **AWS Secrets Manager**: API key management
+- **IAM**: Fine-grained access control
+- **API Gateway Authorizer**: Request authentication
 
-```bash
-# Update stack with RAG enabled
-./scripts/deploy.sh dev true
-
-# Re-deploy Lambda code
-./scripts/package-lambdas.sh dev
-
-# Upload documents
-aws s3 cp my_resume.pdf s3://chatbot-documents-ACCOUNT-dev/
-
-# Ask questions about your documents
-curl -X POST "${API_ENDPOINT}/chat" \
-  -d '{"message": "What skills are in my resume?"}'
-```
+### Infrastructure
+- **CloudFormation**: Infrastructure as Code
+- **GitHub Actions**: CI/CD pipeline
 
 ## Project Structure
 
 ```
-/
-├── .github/workflows/      # GitHub Actions CI/CD
-│   └── deploy.yaml
-├── infra/cloudformation/   # Infrastructure as Code
-│   ├── main.yaml          # Orchestrator
-│   ├── security.yaml      # KMS, IAM
-│   ├── storage.yaml       # DynamoDB, S3
-│   ├── compute.yaml       # Lambda, API Gateway
-│   └── ai.yaml            # OpenSearch (Phase 2)
-├── src/
-│   ├── chatbot/           # Phase 1 code
-│   │   └── handler.py     # Main chat handler
-│   ├── rag/               # Phase 2 code (future)
-│   └── shared/            # Common utilities
+pai/
+├── .github/
+│   └── workflows/
+│       └── deploy.yml           # GitHub Actions CI/CD
+├── infrastructure/
+│   ├── templates/
+│   │   ├── main.yaml           # Master stack
+│   │   ├── security.yaml       # KMS, Secrets, IAM
+│   │   ├── storage.yaml        # DynamoDB, S3
+│   │   ├── compute.yaml        # Lambda functions
+│   │   └── api.yaml           # API Gateway
+│   └── parameters/
+│       ├── dev.json           # Dev environment params
+│       └── prod.json          # Prod environment params
 ├── scripts/
-│   ├── deploy.sh          # Deploy infrastructure
-│   ├── package-lambdas.sh # Build & deploy Lambda
-│   ├── cleanup.sh         # Destroy stack
-│   └── test.sh            # Smoke tests
-├── tests/                 # Unit & integration tests
-├── requirements.txt       # Python dependencies
-├── ARCHITECTURE.md        # Detailed architecture
-└── README.md             # This file
+│   ├── deploy.sh              # Main deployment script
+│   ├── package-lambdas.sh     # Lambda packaging script
+│   └── cleanup.sh             # Stack cleanup script
+├── src/
+│   ├── chatbot/
+│   │   ├── handler.py         # Main Lambda handler
+│   │   ├── bedrock_client.py  # Bedrock integration
+│   │   └── conversation_manager.py  # DynamoDB operations
+│   ├── authorizer/
+│   │   └── handler.py         # API key authorizer
+│   └── shared/
+│       ├── constants.py       # Application constants
+│       ├── utils.py          # Helper functions
+│       └── encryption.py     # KMS encryption utilities
+├── tests/
+│   ├── unit/                 # Unit tests
+│   └── integration/          # Integration tests
+├── requirements.txt          # Python dependencies
+├── requirements-dev.txt      # Dev dependencies
+└── README.md                # This file
 ```
 
-## Features
+## Prerequisites
 
-### Phase 1 (Available Now)
-- [x] Conversational AI with Claude 3.5 Sonnet
-- [x] Conversation history (last 10 messages)
-- [x] Auto-expiring messages (30 days TTL)
-- [x] End-to-end encryption
-- [x] RESTful API
-- [x] CI/CD with GitHub Actions
+1. **AWS Account** with sufficient permissions
+2. **AWS CLI** configured with credentials
+3. **Python 3.12+** installed
+4. **jq** for JSON processing
+5. **Git** for version control
 
-### Phase 2 (Enable with `EnableRAG=true`)
-- [ ] Document upload (PDF, TXT, MD)
-- [ ] Semantic search with embeddings
-- [ ] RAG: Answer questions from your documents
-- [ ] Vector database (OpenSearch Serverless)
+## Quick Start
 
-### Future Enhancements
-- [ ] Streaming responses
-- [ ] Web UI
-- [ ] Multi-user support (Cognito)
-- [ ] Voice interface
-- [ ] Document format support (DOCX, images)
-
-## Development
-
-### Local Testing
+### 1. Clone and Configure
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
-pip install -r requirements-dev.txt
+git clone <your-repo-url>
+cd pai
 
-# Run unit tests
-pytest tests/unit/
+# Generate a secure API key
+API_KEY=$(openssl rand -base64 32)
+echo "Save this API key: $API_KEY"
 
-# Run linting
-ruff check src/
+# Update parameter file
+cd infrastructure/parameters
+cp dev.json dev.json.backup
 
-# Type checking
-mypy src/
+# Edit dev.json with your values
+vim dev.json  # or your preferred editor
 ```
 
-### Environment Variables
-
-The Lambda functions use these environment variables (auto-configured):
-
-```bash
-ENVIRONMENT=dev                    # Deployment environment
-CONVERSATIONS_TABLE=chatbot-conversations-dev
-KMS_KEY_ID=xxx                     # KMS key for encryption
-AI_MODEL_ID=anthropic.claude-3-5-sonnet-20241022-v2:0
-ENABLE_RAG=false                   # Enable RAG features
+Update `dev.json`:
+```json
+[
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "dev"
+  },
+  {
+    "ParameterKey": "ApiKeyValue",
+    "ParameterValue": "your-generated-api-key-here"
+  },
+  {
+    "ParameterKey": "S3BucketName",
+    "ParameterValue": "pai-deployment-your-account-id"
+  }
+]
 ```
 
-## Deployment
-
-### Manual Deployment
+### 2. Deploy
 
 ```bash
-# Deploy to dev
+# Deploy to dev environment
 ./scripts/deploy.sh dev
 
-# Deploy to staging
-./scripts/deploy.sh staging
-
-# Deploy to production with RAG
-./scripts/deploy.sh prod true
+# Or deploy to prod
+./scripts/deploy.sh prod
 ```
 
-### GitHub Actions
+### 3. Test Your Chatbot
 
-Push to `main` branch for automatic deployment:
+```bash
+# Get your API endpoint from deployment output
+API_ENDPOINT="<your-api-endpoint>"
+API_KEY="<your-api-key>"
 
-```yaml
-# .github/workflows/deploy.yaml
-on:
-  push:
-    branches: [main]
+# Test chat endpoint
+curl -X POST $API_ENDPOINT/chat \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Hello! Can you help me understand AWS Lambda?"
+  }'
+
+# Test with conversation continuation
+curl -X POST $API_ENDPOINT/chat \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "conversation_id": "your-conversation-id",
+    "message": "Tell me more about that"
+  }'
+
+# Retrieve conversation history
+curl -X GET $API_ENDPOINT/conversations/{conversation_id} \
+  -H "Authorization: Bearer $API_KEY"
 ```
 
-Manual workflow dispatch:
-1. Go to Actions → Deploy Chatbot
-2. Select environment (dev/staging/prod)
-3. Click "Run workflow"
+## API Reference
 
-### CI/CD Setup
+### POST /chat
 
-1. Add AWS credentials to GitHub Secrets:
-   - `AWS_ACCESS_KEY_ID`
-   - `AWS_SECRET_ACCESS_KEY`
-   - `AWS_REGION`
+Send a message to the chatbot.
 
-## Cost Breakdown
+**Request:**
+```json
+{
+  "message": "Your message here",
+  "conversation_id": "optional-conversation-id",
+  "user_id": "optional-user-id",
+  "system_prompt": "optional-system-prompt"
+}
+```
 
-| Service | Phase 1 (Monthly) | Phase 2 (Monthly) |
-|---------|-------------------|-------------------|
-| Lambda | $1-3 | $4-8 |
-| DynamoDB | $1-2 | $1-2 |
-| API Gateway | $0.50 | $0.50 |
-| Bedrock (Claude) | $5-10 | $5-10 |
-| Bedrock (Embeddings) | - | $2-5 |
-| S3 | - | $1 |
-| OpenSearch | - | $10-20 |
-| KMS | $1 | $1 |
-| **Total** | **~$8.50-16.50** | **~$24.50-47.50** |
+**Response:**
+```json
+{
+  "conversation_id": "uuid-v4",
+  "message": "Assistant response",
+  "usage": {
+    "input_tokens": 100,
+    "output_tokens": 150
+  },
+  "model": "anthropic.claude-3-5-sonnet-20241022-v2:0"
+}
+```
 
-> Costs based on moderate usage. Your actual costs may vary.
+### POST /conversations
 
-## Security
+Create a new conversation.
 
-- **Encryption at Rest**: All data encrypted with KMS
-- **Encryption in Transit**: HTTPS/TLS 1.3
-- **IAM**: Least-privilege policies
-- **No Hardcoded Secrets**: All credentials via IAM roles
-- **Auto Key Rotation**: KMS keys rotate annually
-- **Data Retention**: Auto-expire after 30 days (configurable)
+**Request:**
+```json
+{
+  "user_id": "optional-user-id",
+  "initial_message": "optional-initial-message"
+}
+```
 
-## Monitoring
+**Response:**
+```json
+{
+  "conversation_id": "uuid-v4",
+  "message": "Conversation created successfully"
+}
+```
+
+### GET /conversations/{conversation_id}
+
+Retrieve conversation history.
+
+**Response:**
+```json
+{
+  "conversation_id": "uuid-v4",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hello",
+      "timestamp": "2024-01-01T00:00:00.000Z"
+    },
+    {
+      "role": "assistant",
+      "content": "Hi there!",
+      "timestamp": "2024-01-01T00:00:01.000Z"
+    }
+  ],
+  "created_at": "2024-01-01T00:00:00.000Z",
+  "updated_at": "2024-01-01T00:00:01.000Z"
+}
+```
+
+## CI/CD with GitHub Actions
+
+### Setup GitHub Secrets
+
+Configure these secrets in your GitHub repository:
+
+```
+AWS_ACCESS_KEY_ID       # AWS access key
+AWS_SECRET_ACCESS_KEY   # AWS secret key
+API_KEY                 # Your API key for the chatbot
+S3_BUCKET_NAME         # S3 bucket for deployments
+```
+
+### Automatic Deployments
+
+- **Push to `develop`**: Deploys to dev environment
+- **Push to `main`**: Deploys to prod environment
+- **Manual trigger**: Choose environment via GitHub UI
+
+## Cost Optimization
+
+This architecture is designed for minimal cost:
+
+### Estimated Monthly Costs (Low Usage)
+
+| Service | Usage | Cost |
+|---------|-------|------|
+| API Gateway | 1M requests | $3.50 |
+| Lambda | 1M requests, 512MB, 5s avg | $2.08 |
+| DynamoDB | On-demand, 1M reads/writes | $1.25 |
+| Bedrock | 1M input tokens, 500K output | ~$15 |
+| KMS | 10K requests | $0.03 |
+| Secrets Manager | 1 secret | $0.40 |
+| **Total** | | **~$22.26/month** |
+
+### Cost Saving Tips
+
+1. Adjust Lambda memory based on actual usage
+2. Use DynamoDB on-demand pricing for unpredictable traffic
+3. Enable TTL on DynamoDB to auto-delete old conversations
+4. Set up CloudWatch alarms for cost monitoring
+5. Use shorter conversation history limits
+
+## Monitoring and Logging
 
 ### CloudWatch Logs
 
+View Lambda logs:
 ```bash
-# View chat handler logs
-aws logs tail /aws/lambda/chatbot-chat-dev --follow
+# Chatbot logs
+aws logs tail /aws/lambda/pai-chatbot-dev --follow
 
-# Filter errors
-aws logs filter-pattern /aws/lambda/chatbot-chat-dev --filter-pattern "ERROR"
+# Authorizer logs
+aws logs tail /aws/lambda/pai-authorizer-dev --follow
+
+# API Gateway logs
+aws logs tail /aws/apigateway/pai-dev --follow
 ```
 
 ### Metrics
 
-- Lambda invocations, errors, duration
-- DynamoDB read/write capacity
-- API Gateway 4xx/5xx errors
-- Bedrock token usage
+Monitor key metrics in CloudWatch:
+- API Gateway: Request count, latency, 4xx/5xx errors
+- Lambda: Invocations, duration, errors, throttles
+- DynamoDB: Read/write capacity, throttled requests
+- Bedrock: Model invocations, token usage
+
+## Extending to RAG
+
+To extend this chatbot with RAG capabilities:
+
+### 1. Add Aurora Serverless v2
+
+Create `infrastructure/templates/rag.yaml`:
+```yaml
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for Aurora Serverless
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+
+  AuroraCluster:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      Engine: aurora-postgresql
+      EngineVersion: '15.4'
+      DatabaseName: pai_rag
+      MasterUsername: admin
+      MasterUserPassword: !Ref DBPassword
+      ServerlessV2ScalingConfiguration:
+        MinCapacity: 0.5
+        MaxCapacity: 2
+```
+
+### 2. Create Document Ingestion Lambda
+
+```python
+# src/rag/ingestion_handler.py
+def lambda_handler(event, context):
+    # 1. Download document from S3
+    # 2. Extract text and chunk
+    # 3. Generate embeddings using Bedrock
+    # 4. Store in Aurora with pgvector
+    pass
+```
+
+### 3. Update Chatbot to Use RAG
+
+```python
+# src/chatbot/rag_client.py
+def retrieve_relevant_docs(query, top_k=5):
+    # 1. Generate query embedding
+    # 2. Vector similarity search in Aurora
+    # 3. Return relevant document chunks
+    pass
+```
+
+### 4. Deploy RAG Stack
+
+```bash
+# Add RAG stack to main.yaml
+# Deploy with RAG enabled
+./scripts/deploy.sh dev --enable-rag
+```
+
+## Security Best Practices
+
+1. **API Keys**: Rotate regularly, use strong random keys
+2. **IAM Roles**: Follow principle of least privilege
+3. **Encryption**: All data encrypted at rest and in transit
+4. **Secrets**: Never commit secrets to Git
+5. **VPC**: Consider deploying Lambda in VPC for production
+6. **Rate Limiting**: Configure API Gateway throttling
+7. **Monitoring**: Set up CloudWatch alarms for anomalies
 
 ## Troubleshooting
 
 ### Common Issues
 
-**"Unable to import module 'handler'"**
-- Solution: Run `./scripts/package-lambdas.sh dev`
+**1. Deployment fails with "S3 bucket not found"**
+- Ensure the S3 bucket name in parameters file is correct
+- The script will create the bucket if it doesn't exist
 
-**"AccessDeniedException: User is not authorized to perform: bedrock:InvokeModel"**
-- Solution: Request Bedrock model access in AWS Console
-- Go to Bedrock → Model access → Request access
+**2. "Rate limit exceeded" errors**
+- Check Bedrock service quotas in your region
+- Request quota increase if needed
 
-**"Stack is in ROLLBACK_COMPLETE state"**
-- Solution: Delete and redeploy
-  ```bash
-  aws cloudformation delete-stack --stack-name chatbot-dev
-  aws cloudformation wait stack-delete-complete --stack-name chatbot-dev
-  ./scripts/deploy.sh dev
-  ```
+**3. "Unauthorized" when calling API**
+- Verify API key is correct
+- Check Authorization header format: `Bearer YOUR_API_KEY`
+
+**4. Lambda timeout errors**
+- Increase Lambda timeout in `compute.yaml`
+- Optimize Bedrock request/response size
+
+**5. DynamoDB throttling**
+- DynamoDB is on-demand, no throttling expected
+- Check for provisioned throughput if you switched modes
+
+## Development
+
+### Running Tests
+
+```bash
+# Install dev dependencies
+pip install -r requirements-dev.txt
+
+# Run unit tests
+pytest tests/unit -v
+
+# Run with coverage
+pytest tests/ --cov=src --cov-report=html
+
+# Run linting
+flake8 src/ --max-line-length=127
+```
+
+### Local Testing
+
+```bash
+# Set environment variables
+export CONVERSATIONS_TABLE=PAI-Conversations-dev
+export KMS_KEY_ID=your-kms-key-id
+
+# Test locally with moto
+pytest tests/integration
+```
 
 ## Cleanup
 
-Remove all resources:
+To delete all resources:
 
 ```bash
+# Delete dev environment
 ./scripts/cleanup.sh dev
+
+# Delete prod environment
+./scripts/cleanup.sh prod
 ```
-
-This will:
-1. Delete CloudFormation stack
-2. Remove build artifacts
-3. Clean up S3 buckets
-
-## Documentation
-
-- [ARCHITECTURE.md](ARCHITECTURE.md) - Detailed architecture documentation
-- [DEPLOYMENT.md](DEPLOYMENT.md) - Deployment guide
-- [API Documentation](docs/API.md) - API reference
 
 ## Contributing
 
 1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+2. Create a feature branch
+3. Make your changes
+4. Add tests
+5. Submit a pull request
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file
+MIT License - See LICENSE file
 
 ## Support
 
-- **Issues**: https://github.com/yourusername/pai/issues
-- **Discussions**: https://github.com/yourusername/pai/discussions
+For issues and questions:
+- GitHub Issues: Create an issue in the repository
+- Documentation: Check this README and CloudFormation templates
 
 ## Roadmap
 
-- [x] Phase 1: Simple chatbot (MVP)
-- [ ] Phase 2: RAG capabilities
-- [ ] Web UI (React + CloudFront)
-- [ ] Streaming responses
-- [ ] Multi-user support
-- [ ] Voice interface
-- [ ] Mobile app
+- [x] Phase 1: Basic chatbot with Bedrock
+- [ ] Phase 2: RAG implementation with Aurora Serverless
+- [ ] Phase 3: Multi-modal support (images, audio)
+- [ ] Phase 4: Fine-tuning capabilities
+- [ ] Phase 5: Agent-based workflows
 
----
+## Acknowledgments
 
-**Built with ❤️ using AWS Serverless**
-
-Start simple. Scale smart. 🚀
+Built with AWS serverless services and Anthropic Claude via Amazon Bedrock.

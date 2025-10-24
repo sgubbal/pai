@@ -1,0 +1,14 @@
+[
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "prod"
+  },
+  {
+    "ParameterKey": "ApiKeyValue",
+    "ParameterValue": "REPLACE_WITH_YOUR_API_KEY"
+  },
+  {
+    "ParameterKey": "S3BucketName",
+    "ParameterValue": "REPLACE_WITH_YOUR_S3_BUCKET"
+  }
+]

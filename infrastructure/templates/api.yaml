@@ -1,0 +1,178 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'PAI - API Gateway Resources'
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name
+
+  ChatbotLambdaArn:
+    Type: String
+    Description: Chatbot Lambda function ARN
+
+  AuthorizerLambdaArn:
+    Type: String
+    Description: Authorizer Lambda function ARN
+
+Resources:
+  # REST API
+  ChatbotApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub 'pai-api-${Environment}'
+      Description: PAI Chatbot REST API
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: PAI
+
+  # Lambda Authorizer
+  ApiAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: !Sub 'pai-authorizer-${Environment}'
+      Type: TOKEN
+      AuthorizerUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AuthorizerLambdaArn}/invocations'
+      IdentitySource: method.request.header.Authorization
+      RestApiId: !Ref ChatbotApi
+      AuthorizerResultTtlInSeconds: 300
+
+  # Lambda permission for authorizer
+  AuthorizerInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AuthorizerLambdaArn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ChatbotApi}/authorizers/${ApiAuthorizer}'
+
+  # /chat resource
+  ChatResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ChatbotApi
+      ParentId: !GetAtt ChatbotApi.RootResourceId
+      PathPart: chat
+
+  # POST /chat method
+  ChatPostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ChatbotApi
+      ResourceId: !Ref ChatResource
+      HttpMethod: POST
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref ApiAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ChatbotLambdaArn}/invocations'
+      MethodResponses:
+        - StatusCode: 200
+        - StatusCode: 400
+        - StatusCode: 500
+
+  # /conversations resource
+  ConversationsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ChatbotApi
+      ParentId: !GetAtt ChatbotApi.RootResourceId
+      PathPart: conversations
+
+  # POST /conversations method
+  ConversationsPostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ChatbotApi
+      ResourceId: !Ref ConversationsResource
+      HttpMethod: POST
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref ApiAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ChatbotLambdaArn}/invocations'
+
+  # /conversations/{conversation_id} resource
+  ConversationIdResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ChatbotApi
+      ParentId: !Ref ConversationsResource
+      PathPart: '{conversation_id}'
+
+  # GET /conversations/{conversation_id} method
+  ConversationGetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ChatbotApi
+      ResourceId: !Ref ConversationIdResource
+      HttpMethod: GET
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref ApiAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ChatbotLambdaArn}/invocations'
+
+  # Lambda permission for API Gateway
+  ChatbotLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ChatbotLambdaArn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ChatbotApi}/*'
+
+  # API Deployment
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ChatPostMethod
+      - ConversationsPostMethod
+      - ConversationGetMethod
+    Properties:
+      RestApiId: !Ref ChatbotApi
+      Description: !Sub 'Deployment for ${Environment} environment'
+
+  # API Stage
+  ApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref ChatbotApi
+      DeploymentId: !Ref ApiDeployment
+      StageName: !Ref Environment
+      Description: !Sub '${Environment} stage'
+      TracingEnabled: true
+      MethodSettings:
+        - ResourcePath: '/*'
+          HttpMethod: '*'
+          LoggingLevel: INFO
+          DataTraceEnabled: false
+          MetricsEnabled: true
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: PAI
+
+  # CloudWatch Logs for API Gateway
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/apigateway/pai-${Environment}'
+      RetentionInDays: 14
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub 'https://${ChatbotApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+
+  ApiId:
+    Description: API Gateway ID
+    Value: !Ref ChatbotApi

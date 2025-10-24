@@ -1,75 +1,69 @@
 #!/bin/bash
+
+# Script to package Lambda functions and layers
 set -e
 
-# Lambda Function Packaging Script
+echo "Packaging Lambda functions and layers..."
 
+# Colors for output
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m'
+NC='\033[0m' # No Color
 
-ENVIRONMENT=${1:-dev}
-STACK_NAME="chatbot-${ENVIRONMENT}"
-REGION=${AWS_REGION:-us-east-1}
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+BUILD_DIR="$PROJECT_ROOT/build"
 
-echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}Lambda Function Packaging${NC}"
-echo -e "${GREEN}========================================${NC}"
+# Clean build directory
+echo -e "${YELLOW}Cleaning build directory...${NC}"
+rm -rf "$BUILD_DIR"
+mkdir -p "$BUILD_DIR/layers" "$BUILD_DIR/functions"
 
-# Create build directory
-BUILD_DIR="build/lambda"
-rm -rf $BUILD_DIR
-mkdir -p $BUILD_DIR
+# Package dependencies layer
+echo -e "${YELLOW}Packaging dependencies layer...${NC}"
+LAYER_DIR="$BUILD_DIR/layers/python"
+mkdir -p "$LAYER_DIR"
 
-###################
-# Step 1: Install Dependencies
-###################
-echo -e "${YELLOW}Step 1: Installing dependencies...${NC}"
+# Install dependencies
+pip install -r "$PROJECT_ROOT/requirements.txt" -t "$LAYER_DIR" --quiet
 
-pip3 install -r requirements.txt -t $BUILD_DIR --platform manylinux2014_aarch64 --only-binary=:all: --python-version 3.12 --quiet
+# Create layer zip
+cd "$BUILD_DIR/layers"
+zip -r dependencies.zip python -q
+rm -rf python
+echo -e "${GREEN}Dependencies layer packaged${NC}"
 
-echo -e "${GREEN}✓ Dependencies installed${NC}"
+# Package chatbot Lambda
+echo -e "${YELLOW}Packaging chatbot Lambda...${NC}"
+CHATBOT_DIR="$BUILD_DIR/functions/chatbot"
+mkdir -p "$CHATBOT_DIR"
 
-###################
-# Step 2: Copy Source Code
-###################
-echo ""
-echo -e "${YELLOW}Step 2: Copying source code...${NC}"
+# Copy source code
+cp -r "$PROJECT_ROOT/src" "$CHATBOT_DIR/"
 
-# Copy chatbot handler
-cp src/chatbot/handler.py $BUILD_DIR/
+# Create chatbot zip
+cd "$CHATBOT_DIR"
+zip -r ../chatbot.zip . -q
+cd ..
+rm -rf chatbot
+echo -e "${GREEN}Chatbot Lambda packaged${NC}"
 
-echo -e "${GREEN}✓ Source code copied${NC}"
+# Package authorizer Lambda
+echo -e "${YELLOW}Packaging authorizer Lambda...${NC}"
+AUTHORIZER_DIR="$BUILD_DIR/functions/authorizer"
+mkdir -p "$AUTHORIZER_DIR"
 
-###################
-# Step 3: Create ZIP
-###################
-echo ""
-echo -e "${YELLOW}Step 3: Creating deployment package...${NC}"
+# Copy source code
+cp -r "$PROJECT_ROOT/src" "$AUTHORIZER_DIR/"
 
-cd $BUILD_DIR
-zip -r -q ../chatbot.zip .
-cd - > /dev/null
+# Create authorizer zip
+cd "$AUTHORIZER_DIR"
+zip -r ../authorizer.zip . -q
+cd ..
+rm -rf authorizer
+echo -e "${GREEN}Authorizer Lambda packaged${NC}"
 
-PACKAGE_SIZE=$(du -h build/chatbot.zip | cut -f1)
-echo -e "${GREEN}✓ Package created (${PACKAGE_SIZE})${NC}"
-
-###################
-# Step 4: Upload to Lambda
-###################
-echo ""
-echo -e "${YELLOW}Step 4: Updating Lambda function...${NC}"
-
-FUNCTION_NAME="chatbot-chat-${ENVIRONMENT}"
-
-aws lambda update-function-code \
-    --function-name $FUNCTION_NAME \
-    --zip-file fileb://build/chatbot.zip \
-    --region $REGION > /dev/null
-
-echo -e "${GREEN}✓ Lambda function updated${NC}"
-
-echo ""
-echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}Lambda Deployment Complete!${NC}"
-echo -e "${GREEN}========================================${NC}"
-echo ""
+echo -e "${GREEN}All Lambda packages created successfully in $BUILD_DIR${NC}"
+ls -lh "$BUILD_DIR/layers/"
+ls -lh "$BUILD_DIR/functions/"

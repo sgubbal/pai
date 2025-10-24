@@ -1,50 +1,42 @@
 """
-Unit tests for utility functions
+Unit tests for shared utilities
 """
 import pytest
-from src.utils import generate_id, get_timestamp, get_ttl, truncate_text
+from src.shared.utils import create_response, create_error_response, validate_required_fields
 
 
-def test_generate_id():
-    """Test ID generation"""
-    id1 = generate_id()
-    id2 = generate_id()
+def test_create_response():
+    """Test create_response function"""
+    response = create_response(200, {"message": "success"})
 
-    assert id1 != id2
-    assert len(id1) == 36  # UUID length
-
-    # Test with prefix
-    prefixed = generate_id("test-")
-    assert prefixed.startswith("test-")
-    assert len(prefixed) == 41  # prefix + UUID
+    assert response["statusCode"] == 200
+    assert "body" in response
+    assert "headers" in response
+    assert response["headers"]["Content-Type"] == "application/json"
 
 
-def test_get_timestamp():
-    """Test timestamp generation"""
-    ts1 = get_timestamp()
-    ts2 = get_timestamp()
+def test_create_error_response():
+    """Test create_error_response function"""
+    response = create_error_response(400, "Bad request")
 
-    assert isinstance(ts1, int)
-    assert ts2 >= ts1
-
-
-def test_get_ttl():
-    """Test TTL calculation"""
-    ttl = get_ttl(7)
-
-    assert isinstance(ttl, int)
-    assert ttl > get_timestamp() / 1000  # TTL should be in the future
+    assert response["statusCode"] == 400
+    assert '"error": "Bad request"' in response["body"]
 
 
-def test_truncate_text():
-    """Test text truncation"""
-    text = "This is a long text that needs to be truncated"
+def test_validate_required_fields_success():
+    """Test validate_required_fields with valid data"""
+    data = {"field1": "value1", "field2": "value2"}
+    is_valid, error_msg = validate_required_fields(data, ["field1", "field2"])
 
-    # Test normal truncation
-    truncated = truncate_text(text, max_length=20)
-    assert len(truncated) == 20
-    assert truncated.endswith("...")
+    assert is_valid is True
+    assert error_msg == ""
 
-    # Test text shorter than max_length
-    short = "Short text"
-    assert truncate_text(short, max_length=20) == short
+
+def test_validate_required_fields_missing():
+    """Test validate_required_fields with missing fields"""
+    data = {"field1": "value1"}
+    is_valid, error_msg = validate_required_fields(data, ["field1", "field2"])
+
+    assert is_valid is False
+    assert "Missing required fields" in error_msg
+    assert "field2" in error_msg

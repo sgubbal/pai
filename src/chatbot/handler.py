@@ -1,180 +1,195 @@
 """
-Personal AI Chatbot - Main Chat Handler (Phase 1)
-Handles chat requests, manages conversation history, calls Bedrock
+Main chatbot Lambda handler
 """
-import json
 import os
-from datetime import datetime, timedelta
+import json
+import logging
 from typing import Dict, Any
+from src.chatbot.bedrock_client import BedrockClient
+from src.chatbot.conversation_manager import ConversationManager
+from src.shared.encryption import EncryptionManager
+from src.shared.utils import create_response, create_error_response, validate_required_fields
+from src.shared.constants import ERROR_INVALID_REQUEST, ERROR_INTERNAL
 
-import boto3
-from botocore.exceptions import ClientError
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 # Environment variables
-TABLE_NAME = os.environ.get('CONVERSATIONS_TABLE')
-MODEL_ID = os.environ.get('AI_MODEL_ID', 'anthropic.claude-3-5-sonnet-20241022-v2:0')
-ENVIRONMENT = os.environ.get('ENVIRONMENT', 'dev')
-AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
-AWS_ACCESS_KEY_ID = os.environ.get('AWS_ACCESS_KEY_ID')
-AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY')
+KMS_KEY_ID = os.environ.get('KMS_KEY_ID')
+CONVERSATIONS_TABLE = os.environ.get('CONVERSATIONS_TABLE')
 
-# Initialize AWS clients with explicit credentials
-dynamodb = boto3.resource(
-    'dynamodb',
-    region_name=AWS_REGION,
-    aws_access_key_id=AWS_ACCESS_KEY_ID,
-    aws_secret_access_key=AWS_SECRET_ACCESS_KEY
-)
-bedrock = boto3.client(
-    'bedrock-runtime',
-    region_name=AWS_REGION,
-    aws_access_key_id=AWS_ACCESS_KEY_ID,
-    aws_secret_access_key=AWS_SECRET_ACCESS_KEY
-)
-
-# Constants
-MAX_HISTORY_MESSAGES = 10
-TTL_DAYS = 30
+# Initialize clients
+bedrock_client = BedrockClient()
+encryption_manager = EncryptionManager(KMS_KEY_ID) if KMS_KEY_ID else None
+conversation_manager = ConversationManager(CONVERSATIONS_TABLE, encryption_manager)
 
 
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
-    """Main Lambda handler for chat requests"""
+    """
+    Main Lambda handler for chatbot
+
+    Args:
+        event: API Gateway event
+        context: Lambda context
+
+    Returns:
+        API Gateway response
+    """
     try:
-        # Parse request
+        # Parse request body
         body = json.loads(event.get('body', '{}'))
-        conversation_id = body.get('conversation_id', 'default')
-        user_message = body.get('message', '')
-        
-        if not user_message:
-            return response(400, {'error': 'Message is required'})
-        
-        print(f"Processing chat request - conversation_id: {conversation_id}")
-        
-        # Load conversation history
-        history = load_conversation_history(conversation_id)
-        
-        # Save user message
-        save_message(conversation_id, 'user', user_message)
-        
-        # Build messages for Claude
-        messages = build_messages(history, user_message)
-        
-        # Call Bedrock
-        assistant_response = call_bedrock(messages)
-        
-        # Save assistant response
-        save_message(conversation_id, 'assistant', assistant_response)
-        
-        return response(200, {
-            'conversation_id': conversation_id,
-            'message': assistant_response,
-            'timestamp': datetime.utcnow().isoformat()
-        })
-        
+        logger.info(f"Received request: {json.dumps(body)}")
+
+        # Get HTTP method and path
+        http_method = event.get('httpMethod', '')
+        path = event.get('path', '')
+
+        # Route to appropriate handler
+        if http_method == 'POST' and path.endswith('/chat'):
+            return handle_chat(body)
+        elif http_method == 'POST' and path.endswith('/conversations'):
+            return handle_new_conversation(body)
+        elif http_method == 'GET' and '/conversations/' in path:
+            return handle_get_conversation(event)
+        else:
+            return create_error_response(404, "Endpoint not found")
+
+    except json.JSONDecodeError:
+        logger.error("Invalid JSON in request body")
+        return create_error_response(400, ERROR_INVALID_REQUEST)
     except Exception as e:
-        print(f"Error: {str(e)}")
-        return response(500, {'error': 'Internal server error', 'details': str(e)})
+        logger.error(f"Error processing request: {str(e)}")
+        return create_error_response(500, ERROR_INTERNAL)
 
 
-def load_conversation_history(conversation_id: str) -> list:
-    """Load recent conversation history from DynamoDB"""
+def handle_chat(body: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle chat message request
+
+    Args:
+        body: Request body
+
+    Returns:
+        API Gateway response
+    """
+    # Validate required fields
+    is_valid, error_msg = validate_required_fields(body, ['message'])
+    if not is_valid:
+        return create_error_response(400, error_msg)
+
+    user_message = body['message']
+    conversation_id = body.get('conversation_id')
+    user_id = body.get('user_id', 'default_user')
+    system_prompt = body.get('system_prompt')
+
     try:
-        table = dynamodb.Table(TABLE_NAME)
-        response = table.query(
-            KeyConditionExpression='conversation_id = :cid',
-            ExpressionAttributeValues={':cid': conversation_id},
-            ScanIndexForward=False,  # Most recent first
-            Limit=MAX_HISTORY_MESSAGES
+        # Create new conversation if no ID provided
+        if not conversation_id:
+            conversation_id = conversation_manager.create_conversation(
+                user_id=user_id,
+                initial_message={'role': 'user', 'content': user_message}
+            )
+            conversation_history = []
+        else:
+            # Get existing conversation history
+            conversation_history = conversation_manager.get_conversation_history(conversation_id)
+
+            # Add new user message
+            conversation_manager.add_message(
+                conversation_id,
+                {'role': 'user', 'content': user_message}
+            )
+
+        # Format messages for Bedrock
+        messages = bedrock_client.format_conversation(conversation_history)
+        messages.append({'role': 'user', 'content': user_message})
+
+        # Generate response from Bedrock
+        bedrock_response = bedrock_client.generate_response(
+            messages=messages,
+            system_prompt=system_prompt
         )
-        
-        # Reverse to get chronological order
-        items = list(reversed(response.get('Items', [])))
-        return items
-        
-    except ClientError as e:
-        print(f"DynamoDB error: {e}")
-        return []
 
+        assistant_message = bedrock_response['message']
 
-def save_message(conversation_id: str, role: str, content: str):
-    """Save message to DynamoDB"""
-    try:
-        table = dynamodb.Table(TABLE_NAME)
-        timestamp = datetime.utcnow().isoformat()
-        ttl = int((datetime.utcnow() + timedelta(days=TTL_DAYS)).timestamp())
-        
-        table.put_item(
-            Item={
-                'conversation_id': conversation_id,
-                'timestamp': timestamp,
-                'role': role,
-                'content': content,
-                'ttl': ttl
-            }
+        # Save assistant response to conversation
+        conversation_manager.add_message(
+            conversation_id,
+            {'role': 'assistant', 'content': assistant_message}
         )
-        print(f"Saved {role} message to DynamoDB")
-        
-    except ClientError as e:
-        print(f"Error saving message: {e}")
 
-
-def build_messages(history: list, user_message: str) -> list:
-    """Build messages array for Claude API"""
-    messages = []
-    
-    # Add history
-    for item in history:
-        messages.append({
-            'role': item['role'],
-            'content': item['content']
+        # Return response
+        return create_response(200, {
+            'conversation_id': conversation_id,
+            'message': assistant_message,
+            'usage': bedrock_response.get('usage', {}),
+            'model': bedrock_response.get('model')
         })
-    
-    # Add current user message
-    messages.append({
-        'role': 'user',
-        'content': user_message
-    })
-    
-    return messages
+
+    except Exception as e:
+        logger.error(f"Error in chat handler: {str(e)}")
+        return create_error_response(500, ERROR_INTERNAL)
 
 
-def call_bedrock(messages: list) -> str:
-    """Call Bedrock API with Claude model"""
+def handle_new_conversation(body: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle new conversation creation
+
+    Args:
+        body: Request body
+
+    Returns:
+        API Gateway response
+    """
+    user_id = body.get('user_id', 'default_user')
+    initial_message = body.get('initial_message', 'Hello')
+
     try:
-        # Prepare request
-        request_body = {
-            'anthropic_version': 'bedrock-2023-05-31',
-            'messages': messages,
-            'max_tokens': 2048,
-            'temperature': 0.7,
-            'top_p': 0.9
-        }
-        
-        # Call Bedrock
-        response = bedrock.invoke_model(
-            modelId=MODEL_ID,
-            body=json.dumps(request_body)
+        conversation_id = conversation_manager.create_conversation(
+            user_id=user_id,
+            initial_message={'role': 'user', 'content': initial_message}
         )
-        
-        # Parse response
-        response_body = json.loads(response['body'].read())
-        assistant_message = response_body['content'][0]['text']
-        
-        print(f"Bedrock response received ({len(assistant_message)} chars)")
-        return assistant_message
-        
-    except ClientError as e:
-        print(f"Bedrock error: {e}")
-        return "I'm sorry, I encountered an error processing your request."
+
+        return create_response(201, {
+            'conversation_id': conversation_id,
+            'message': 'Conversation created successfully'
+        })
+
+    except Exception as e:
+        logger.error(f"Error creating conversation: {str(e)}")
+        return create_error_response(500, ERROR_INTERNAL)
 
 
-def response(status_code: int, body: Dict[str, Any]) -> Dict[str, Any]:
-    """Format API Gateway response"""
-    return {
-        'statusCode': status_code,
-        'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
-        },
-        'body': json.dumps(body)
-    }
+def handle_get_conversation(event: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle get conversation request
+
+    Args:
+        event: API Gateway event
+
+    Returns:
+        API Gateway response
+    """
+    # Extract conversation_id from path
+    path_parameters = event.get('pathParameters', {})
+    conversation_id = path_parameters.get('conversation_id')
+
+    if not conversation_id:
+        return create_error_response(400, "Missing conversation_id")
+
+    try:
+        conversation = conversation_manager.get_conversation(conversation_id)
+
+        if not conversation:
+            return create_error_response(404, "Conversation not found")
+
+        return create_response(200, {
+            'conversation_id': conversation_id,
+            'messages': conversation.get('messages', []),
+            'created_at': conversation.get('created_at'),
+            'updated_at': conversation.get('updated_at')
+        })
+
+    except Exception as e:
+        logger.error(f"Error retrieving conversation: {str(e)}")
+        return create_error_response(500, ERROR_INTERNAL)

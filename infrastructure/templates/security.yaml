@@ -1,0 +1,162 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'PAI - Security Resources (KMS, Secrets Manager, IAM)'
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name
+
+  ApiKeyValue:
+    Type: String
+    NoEcho: true
+    Description: API key for authentication
+
+Resources:
+  # KMS Key for end-to-end encryption
+  EncryptionKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KMS key for PAI conversation encryption
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: Allow Lambda to use the key
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - 'kms:Decrypt'
+              - 'kms:Encrypt'
+              - 'kms:GenerateDataKey'
+            Resource: '*'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: PAI
+
+  EncryptionKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/pai-${Environment}'
+      TargetKeyId: !Ref EncryptionKey
+
+  # Secrets Manager for API key
+  ApiKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub 'pai-api-key-${Environment}'
+      Description: API key for PAI chatbot authentication
+      SecretString: !Sub '{"api_key": "${ApiKeyValue}"}'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: PAI
+
+  # IAM Role for Chatbot Lambda
+  ChatbotLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'pai-chatbot-lambda-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: BedrockAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'bedrock:InvokeModel'
+                  - 'bedrock:InvokeModelWithResponseStream'
+                Resource: '*'
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:PutItem'
+                  - 'dynamodb:GetItem'
+                  - 'dynamodb:UpdateItem'
+                  - 'dynamodb:Query'
+                Resource: !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/PAI-Conversations-${Environment}'
+        - PolicyName: KMSAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'kms:Decrypt'
+                  - 'kms:Encrypt'
+                  - 'kms:GenerateDataKey'
+                Resource: !GetAtt EncryptionKey.Arn
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: PAI
+
+  # IAM Role for Authorizer Lambda
+  AuthorizerLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'pai-authorizer-lambda-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'secretsmanager:GetSecretValue'
+                Resource: !Ref ApiKeySecret
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: PAI
+
+Outputs:
+  KMSKeyId:
+    Description: KMS key ID for encryption
+    Value: !Ref EncryptionKey
+
+  KMSKeyArn:
+    Description: KMS key ARN
+    Value: !GetAtt EncryptionKey.Arn
+
+  ApiKeySecretArn:
+    Description: Secrets Manager ARN for API key
+    Value: !Ref ApiKeySecret
+
+  ChatbotLambdaRoleArn:
+    Description: IAM role ARN for chatbot Lambda
+    Value: !GetAtt ChatbotLambdaRole.Arn
+
+  AuthorizerLambdaRoleArn:
+    Description: IAM role ARN for authorizer Lambda
+    Value: !GetAtt AuthorizerLambdaRole.Arn

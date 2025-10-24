@@ -1,9 +1,10 @@
-name: Deploy PAI to AWS
+name: Deploy PAI Chatbot
 
 on:
   push:
     branches:
       - main
+      - develop
   workflow_dispatch:
     inputs:
       environment:
@@ -17,81 +18,73 @@ on:
 
 env:
   AWS_REGION: us-east-1
-  NODE_VERSION: '20'
+  PYTHON_VERSION: '3.12'
 
 jobs:
-  build:
-    name: Build and Test
+  test:
+    name: Run Tests
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
 
-      - name: Run linter
-        run: npm run lint
-
-      - name: Build TypeScript
-        run: npm run build
+      - name: Run linting
+        run: |
+          flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 src/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
       - name: Run tests
-        run: npm test
+        run: |
+          pytest tests/ -v --cov=src --cov-report=term-missing
 
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: dist/
-          retention-days: 1
-
-  package:
-    name: Package Lambda Functions
-    needs: build
+  deploy:
+    name: Deploy to AWS
     runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || github.event_name == 'workflow_dispatch'
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist/
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
 
-      - name: Install production dependencies
-        run: npm ci --production
-
-      - name: Package Lambda functions
-        run: ./scripts/package-functions.sh
-
-      - name: Upload Lambda packages
-        uses: actions/upload-artifact@v4
-        with:
-          name: lambda-packages
-          path: dist/packages/
-          retention-days: 1
-
-  deploy-infrastructure:
-    name: Deploy Infrastructure
-    needs: package
-    runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.environment || 'dev' }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Determine environment
+        id: determine-env
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "environment=prod" >> $GITHUB_OUTPUT
+          else
+            echo "environment=dev" >> $GITHUB_OUTPUT
+          fi
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -100,68 +93,42 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Deploy CloudFormation stack
+      - name: Update parameter file with secrets
         run: |
-          ./scripts/deploy.sh ${{ github.event.inputs.environment || 'dev' }}
+          ENV=${{ steps.determine-env.outputs.environment }}
+          jq --arg key "${{ secrets.API_KEY }}" \
+             --arg bucket "${{ secrets.S3_BUCKET_NAME }}" \
+             '(.[] | select(.ParameterKey=="ApiKeyValue") | .ParameterValue) = $key |
+              (.[] | select(.ParameterKey=="S3BucketName") | .ParameterValue) = $bucket' \
+             infrastructure/parameters/${ENV}.json > infrastructure/parameters/${ENV}.tmp.json
+          mv infrastructure/parameters/${ENV}.tmp.json infrastructure/parameters/${ENV}.json
 
-      - name: Save stack outputs
+      - name: Deploy to AWS
         run: |
-          aws cloudformation describe-stacks \
-            --stack-name pai-${{ github.event.inputs.environment || 'dev' }} \
-            --query 'Stacks[0].Outputs' \
-            --output json > outputs.json
+          ENV=${{ steps.determine-env.outputs.environment }}
+          bash ./scripts/deploy.sh $ENV
 
-      - name: Upload stack outputs
-        uses: actions/upload-artifact@v4
-        with:
-          name: stack-outputs
-          path: outputs.json
-          retention-days: 1
-
-  deploy-functions:
-    name: Deploy Lambda Functions
-    needs: deploy-infrastructure
-    runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.environment || 'dev' }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Download Lambda packages
-        uses: actions/download-artifact@v4
-        with:
-          name: lambda-packages
-          path: dist/packages/
-
-      - name: Deploy Lambda functions
+      - name: Get API endpoint
+        id: get-endpoint
         run: |
-          ./scripts/deploy-functions.sh ${{ github.event.inputs.environment || 'dev' }}
+          ENV=${{ steps.determine-env.outputs.environment }}
+          ENDPOINT=$(aws cloudformation describe-stacks \
+            --stack-name pai-chatbot-${ENV} \
+            --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' \
+            --output text)
+          echo "endpoint=$ENDPOINT" >> $GITHUB_OUTPUT
 
-      - name: Run smoke tests
+      - name: Deployment summary
         run: |
-          ./scripts/smoke-test.sh ${{ github.event.inputs.environment || 'dev' }}
-
-  notify:
-    name: Notify Deployment Status
-    needs: [deploy-infrastructure, deploy-functions]
-    runs-on: ubuntu-latest
-    if: always()
-    steps:
-      - name: Download stack outputs
-        uses: actions/download-artifact@v4
-        with:
-          name: stack-outputs
-          path: .
-
-      - name: Display API endpoint
-        run: |
-          API_ENDPOINT=$(cat outputs.json | jq -r '.[] | select(.OutputKey=="ApiEndpoint") | .OutputValue')
-          echo "API Endpoint: $API_ENDPOINT"
-          echo "Deployment completed successfully!"
+          echo "### Deployment Successful! :rocket:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ steps.determine-env.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**API Endpoint:** ${{ steps.get-endpoint.outputs.endpoint }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Test the API:**" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "curl -X POST ${{ steps.get-endpoint.outputs.endpoint }}/chat \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -H 'Authorization: Bearer YOUR_API_KEY' \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -H 'Content-Type: application/json' \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -d '{\"message\": \"Hello\"}'" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

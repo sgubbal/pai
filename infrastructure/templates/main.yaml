@@ -1,0 +1,106 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'PAI - Personal AI Chatbot - Main Stack'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - prod
+    Description: Environment name
+
+  ApiKeyValue:
+    Type: String
+    NoEcho: true
+    Description: API key for authentication
+    MinLength: 32
+
+  S3BucketName:
+    Type: String
+    Description: S3 bucket name for Lambda deployment packages
+
+Resources:
+  # Security Stack - KMS, Secrets Manager, IAM Roles
+  SecurityStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${S3BucketName}.s3.amazonaws.com/templates/security.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        ApiKeyValue: !Ref ApiKeyValue
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: PAI
+
+  # Storage Stack - DynamoDB, S3
+  StorageStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${S3BucketName}.s3.amazonaws.com/templates/storage.yaml'
+      Parameters:
+        Environment: !Ref Environment
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: PAI
+
+  # Compute Stack - Lambda Functions
+  ComputeStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - SecurityStack
+      - StorageStack
+    Properties:
+      TemplateURL: !Sub 'https://${S3BucketName}.s3.amazonaws.com/templates/compute.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        S3BucketName: !Ref S3BucketName
+        ConversationsTable: !GetAtt StorageStack.Outputs.ConversationsTableName
+        KMSKeyId: !GetAtt SecurityStack.Outputs.KMSKeyId
+        ApiKeySecretArn: !GetAtt SecurityStack.Outputs.ApiKeySecretArn
+        ChatbotLambdaRoleArn: !GetAtt SecurityStack.Outputs.ChatbotLambdaRoleArn
+        AuthorizerLambdaRoleArn: !GetAtt SecurityStack.Outputs.AuthorizerLambdaRoleArn
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: PAI
+
+  # API Stack - API Gateway
+  ApiStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: ComputeStack
+    Properties:
+      TemplateURL: !Sub 'https://${S3BucketName}.s3.amazonaws.com/templates/api.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        ChatbotLambdaArn: !GetAtt ComputeStack.Outputs.ChatbotLambdaArn
+        AuthorizerLambdaArn: !GetAtt ComputeStack.Outputs.AuthorizerLambdaArn
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: PAI
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !GetAtt ApiStack.Outputs.ApiEndpoint
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiEndpoint'
+
+  ConversationsTableName:
+    Description: DynamoDB table for conversations
+    Value: !GetAtt StorageStack.Outputs.ConversationsTableName
+    Export:
+      Name: !Sub '${AWS::StackName}-ConversationsTable'
+
+  KMSKeyId:
+    Description: KMS key for encryption
+    Value: !GetAtt SecurityStack.Outputs.KMSKeyId
+    Export:
+      Name: !Sub '${AWS::StackName}-KMSKeyId'
