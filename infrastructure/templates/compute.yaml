@@ -65,7 +65,6 @@ Resources:
           LOG_LEVEL: INFO
       Timeout: 60
       MemorySize: 512
-      ReservedConcurrentExecutions: 10
       Tags:
         - Key: Environment
           Value: !Ref Environment
