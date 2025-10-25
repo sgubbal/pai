@@ -5,10 +5,10 @@
   },
   {
     "ParameterKey": "ApiKeyValue",
-    "ParameterValue": "REPLACE_WITH_YOUR_API_KEY"
+    "ParameterValue": "1zruxXU50nQcIiryr0hb4SM8fGbSgLOAdcBwnpUoAHY="
   },
   {
     "ParameterKey": "S3BucketName",
-    "ParameterValue": "REPLACE_WITH_YOUR_S3_BUCKET"
+    "ParameterValue": "pai-deployment-781938588235"
   }
 ]
