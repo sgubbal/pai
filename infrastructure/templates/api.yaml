@@ -152,7 +152,7 @@ Resources:
       MethodSettings:
         - ResourcePath: '/*'
           HttpMethod: '*'
-          LoggingLevel: INFO
+          # LoggingLevel: INFO  # Disabled - requires CloudWatch Logs role in account settings
           DataTraceEnabled: false
           MetricsEnabled: true
       Tags:
