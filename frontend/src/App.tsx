@@ -9,7 +9,7 @@ import { Conversation, Message, Theme, AppState } from './types';
 import { apiClient, APIError } from './services/api';
 import { storage } from './utils/storage';
 import { generateConversationTitle, getErrorMessage, isMobile } from './utils/helpers';
-import { config, validateConfig } from './config';
+import { validateConfig } from './config';
 
 export const App: React.FC = () => {
   const [state, setState] = useState<AppState>({
