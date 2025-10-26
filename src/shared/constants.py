@@ -3,8 +3,8 @@ Constants used across the application
 """
 
 # Bedrock Configuration
-# Using cross-region inference profile for Claude 3.5 Sonnet v2
-BEDROCK_MODEL_ID = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+# Using Claude 3.5 Sonnet v1 (stable, no inference profile required)
+BEDROCK_MODEL_ID = "anthropic.claude-3-5-sonnet-20240620-v1:0"
 BEDROCK_REGION = "us-east-1"
 
 # DynamoDB Configuration
