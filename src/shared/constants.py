@@ -3,8 +3,8 @@ Constants used across the application
 """
 
 # Bedrock Configuration
-# Using Claude 3.5 Sonnet v1 (stable, no inference profile required)
-BEDROCK_MODEL_ID = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+# Using Claude 3 Haiku (fast, no use case form required)
+BEDROCK_MODEL_ID = "anthropic.claude-3-haiku-20240307-v1:0"
 BEDROCK_REGION = "us-east-1"
 
 # DynamoDB Configuration

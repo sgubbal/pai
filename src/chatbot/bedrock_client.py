@@ -1,6 +1,7 @@
 """
 Amazon Bedrock client for LLM interactions
 """
+import os
 import json
 import boto3
 import logging
@@ -16,13 +17,16 @@ class BedrockClient:
     Client for interacting with Amazon Bedrock
     """
 
-    def __init__(self, model_id: str = BEDROCK_MODEL_ID):
+    def __init__(self, model_id: str = None):
         """
         Initialize Bedrock client
 
         Args:
-            model_id: Bedrock model identifier
+            model_id: Bedrock model identifier (optional, defaults to env var or constant)
         """
+        # Allow environment variable to override default model
+        if model_id is None:
+            model_id = os.environ.get('BEDROCK_MODEL_ID', BEDROCK_MODEL_ID)
         self.model_id = model_id
 
     def generate_response(
