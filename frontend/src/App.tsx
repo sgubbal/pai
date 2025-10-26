@@ -152,7 +152,6 @@ export const App: React.FC = () => {
   const handleSendMessage = useCallback(async (content: string) => {
     // Create or get current conversation
     let conversationId = state.currentConversationId;
-    let isNewConversation = false;
 
     if (!conversationId) {
       const newConversation: Conversation = {
@@ -170,7 +169,6 @@ export const App: React.FC = () => {
       }));
 
       conversationId = newConversation.id;
-      isNewConversation = true;
     }
 
     // Create user message
