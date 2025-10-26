@@ -80,7 +80,14 @@ A serverless, cost-effective, and secure personal AI chatbot built on AWS with e
 
 ## Technology Stack
 
-### Compute
+### Frontend
+- **React 18**: Modern UI framework
+- **TypeScript**: Type-safe development
+- **Vite**: Fast build tool and dev server
+- **TailwindCSS**: Utility-first styling
+- **AWS Amplify**: Serverless hosting and CI/CD
+
+### Backend
 - **AWS Lambda**: Serverless compute (Python 3.12)
 - **Amazon Bedrock**: LLM service (Claude 3.5 Sonnet)
 
@@ -94,10 +101,12 @@ A serverless, cost-effective, and secure personal AI chatbot built on AWS with e
 - **AWS Secrets Manager**: API key management
 - **IAM**: Fine-grained access control
 - **API Gateway Authorizer**: Request authentication
+- **Web Crypto API**: Client-side encryption
 
 ### Infrastructure
 - **CloudFormation**: Infrastructure as Code
 - **GitHub Actions**: CI/CD pipeline
+- **AWS Amplify**: Frontend hosting and deployment
 
 ## Project Structure
 
@@ -106,6 +115,18 @@ pai/
 ├── .github/
 │   └── workflows/
 │       └── deploy.yml           # GitHub Actions CI/CD
+├── frontend/                    # React frontend (AWS Amplify)
+│   ├── src/
+│   │   ├── components/          # React components
+│   │   ├── services/            # API clients
+│   │   ├── utils/               # Utilities
+│   │   ├── types/               # TypeScript types
+│   │   ├── styles/              # Global styles
+│   │   ├── App.tsx              # Main app
+│   │   └── main.tsx             # Entry point
+│   ├── amplify.yml              # Amplify build config
+│   ├── package.json             # Dependencies
+│   └── README.md                # Frontend docs
 ├── infrastructure/
 │   ├── templates/
 │   │   ├── main.yaml           # Master stack
@@ -121,7 +142,7 @@ pai/
 │   ├── package-lambdas.sh     # Lambda packaging script
 │   ├── setup-apigateway-logging.sh  # Enable API Gateway CloudWatch logging
 │   └── cleanup.sh             # Stack cleanup script
-├── src/
+├── src/                        # Backend (Python)
 │   ├── chatbot/
 │   │   ├── handler.py         # Main Lambda handler
 │   │   ├── bedrock_client.py  # Bedrock integration
@@ -137,6 +158,7 @@ pai/
 │   └── integration/          # Integration tests
 ├── requirements.txt          # Python dependencies
 ├── requirements-dev.txt      # Dev dependencies
+├── AMPLIFY_DEPLOYMENT_GUIDE.md  # Frontend deployment guide
 └── README.md                # This file
 ```
 
@@ -150,7 +172,13 @@ pai/
 
 ## Quick Start
 
-### 1. Clone and Configure
+This project has two main components:
+1. **Backend**: Serverless API (Lambda + API Gateway + DynamoDB)
+2. **Frontend**: React web app (hosted on AWS Amplify)
+
+### Backend Deployment
+
+#### 1. Clone and Configure
 
 ```bash
 git clone <your-repo-url>
@@ -186,7 +214,7 @@ Update `dev.json`:
 ]
 ```
 
-### 2. Deploy
+#### 2. Deploy Backend
 
 ```bash
 # Deploy to dev environment
@@ -196,7 +224,7 @@ Update `dev.json`:
 ./scripts/deploy.sh prod
 ```
 
-### 3. Test Your Chatbot
+#### 3. Test Backend API
 
 ```bash
 # Get your API endpoint from deployment output
@@ -224,6 +252,50 @@ curl -X POST $API_ENDPOINT/chat \
 curl -X GET $API_ENDPOINT/conversations/{conversation_id} \
   -H "Authorization: Bearer $API_KEY"
 ```
+
+### Frontend Deployment
+
+#### 1. Get Backend Configuration
+
+After deploying the backend, get your API URL:
+
+```bash
+# Get API Gateway URL
+aws cloudformation describe-stacks \
+  --stack-name pai-chatbot-prod \
+  --query 'Stacks[0].Outputs[?OutputKey==`ApiUrl`].OutputValue' \
+  --output text
+```
+
+Save the API URL and API key - you'll need these for Amplify.
+
+#### 2. Push Frontend to GitHub
+
+```bash
+# Make sure you're in the repo root
+git add frontend/
+git commit -m "Add React frontend"
+git push origin main
+```
+
+#### 3. Deploy to AWS Amplify
+
+Follow the detailed guide: [AMPLIFY_DEPLOYMENT_GUIDE.md](AMPLIFY_DEPLOYMENT_GUIDE.md)
+
+**Quick steps:**
+1. Go to AWS Console → AWS Amplify
+2. Click "New app" → "Host web app"
+3. Connect to GitHub, select `pai` repo, `main` branch
+4. Set monorepo base directory: `frontend`
+5. Add environment variables:
+   - `VITE_API_URL` = Your API Gateway URL
+   - `VITE_API_KEY` = Your API key
+6. Save and deploy
+7. Access your chatbot at the Amplify URL
+
+**Deployment time**: 3-5 minutes
+
+For detailed instructions with screenshots and troubleshooting, see [AMPLIFY_DEPLOYMENT_GUIDE.md](AMPLIFY_DEPLOYMENT_GUIDE.md).
 
 ## API Reference
 
@@ -326,13 +398,17 @@ This architecture is designed for minimal cost:
 
 | Service | Usage | Cost |
 |---------|-------|------|
+| **Backend** | | |
 | API Gateway | 1M requests | $3.50 |
 | Lambda | 1M requests, 512MB, 5s avg | $2.08 |
 | DynamoDB | On-demand, 1M reads/writes | $1.25 |
 | Bedrock | 1M input tokens, 500K output | ~$15 |
 | KMS | 10K requests | $0.03 |
 | Secrets Manager | 1 secret | $0.40 |
-| **Total** | | **~$22.26/month** |
+| **Frontend** | | |
+| Amplify Hosting | <1K visits/month | ~$0.15 |
+| Amplify Build | 1-2 builds/month | ~$0.10 |
+| **Total** | | **~$22.51/month** |
 
 ### Cost Saving Tips
 
