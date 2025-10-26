@@ -119,6 +119,7 @@ pai/
 ├── scripts/
 │   ├── deploy.sh              # Main deployment script
 │   ├── package-lambdas.sh     # Lambda packaging script
+│   ├── setup-apigateway-logging.sh  # Enable API Gateway CloudWatch logging
 │   └── cleanup.sh             # Stack cleanup script
 ├── src/
 │   ├── chatbot/
@@ -460,6 +461,12 @@ def retrieve_relevant_docs(query, top_k=5):
 **5. DynamoDB throttling**
 - DynamoDB is on-demand, no throttling expected
 - Check for provisioned throughput if you switched modes
+
+**6. "CloudWatch Logs role ARN must be set" error**
+- API Gateway logging is currently disabled to avoid this error
+- To enable logging, run: `./scripts/setup-apigateway-logging.sh`
+- Then uncomment `LoggingLevel: INFO` in `infrastructure/templates/api.yaml`
+- Redeploy the stack to enable API Gateway logs
 
 ## Development
 
