@@ -49,17 +49,53 @@ class BedrockClient:
             Dictionary containing response and metadata
         """
         try:
-            # Prepare request body for Claude models
-            request_body = {
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "messages": messages
-            }
+            # Determine model provider
+            is_anthropic = 'anthropic' in self.model_id.lower()
+            is_amazon = 'amazon' in self.model_id.lower()
 
-            # Add system prompt if provided
-            if system_prompt:
-                request_body["system"] = system_prompt
+            # Prepare request body based on model provider
+            if is_anthropic:
+                # Claude models format
+                request_body = {
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                    "messages": messages
+                }
+                if system_prompt:
+                    request_body["system"] = system_prompt
+
+            elif is_amazon:
+                # Amazon Nova/Titan models format - content must be array
+                formatted_messages = []
+                for msg in messages:
+                    formatted_msg = {"role": msg["role"]}
+                    # Convert content to array format if it's a string
+                    if isinstance(msg.get("content"), str):
+                        formatted_msg["content"] = [{"text": msg["content"]}]
+                    else:
+                        formatted_msg["content"] = msg["content"]
+                    formatted_messages.append(formatted_msg)
+
+                request_body = {
+                    "messages": formatted_messages,
+                    "inferenceConfig": {
+                        "maxTokens": max_tokens,
+                        "temperature": temperature
+                    }
+                }
+                if system_prompt:
+                    request_body["system"] = [{"text": system_prompt}]
+            else:
+                # Default to Claude format
+                request_body = {
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                    "messages": messages
+                }
+                if system_prompt:
+                    request_body["system"] = system_prompt
 
             # Invoke Bedrock model
             response = bedrock_runtime.invoke_model(
@@ -72,13 +108,31 @@ class BedrockClient:
             # Parse response
             response_body = json.loads(response['body'].read())
 
-            # Extract message content
-            assistant_message = response_body.get('content', [{}])[0].get('text', '')
+            # Log response structure for debugging
+            logger.info(f"Bedrock response keys: {list(response_body.keys())}")
+
+            # Extract message content (works for both Claude and Amazon models)
+            if 'content' in response_body and isinstance(response_body['content'], list):
+                assistant_message = response_body['content'][0].get('text', '')
+            elif 'output' in response_body:
+                # Some Amazon models use 'output'
+                assistant_message = response_body['output'].get('message', {}).get('content', [{}])[0].get('text', '')
+            else:
+                assistant_message = str(response_body)
+
+            # Extract usage information (different formats for different models)
+            usage_raw = response_body.get('usage', {})
+
+            # Normalize to snake_case for consistency
+            usage = {
+                "input_tokens": usage_raw.get('input_tokens') or usage_raw.get('inputTokens', 0),
+                "output_tokens": usage_raw.get('output_tokens') or usage_raw.get('outputTokens', 0)
+            }
 
             return {
                 "message": assistant_message,
-                "stop_reason": response_body.get('stop_reason'),
-                "usage": response_body.get('usage', {}),
+                "stop_reason": response_body.get('stop_reason') or response_body.get('stopReason'),
+                "usage": usage,
                 "model": self.model_id
             }
 
