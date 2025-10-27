@@ -26,8 +26,10 @@ export interface ChatRequest {
 
 export interface ChatResponse {
   conversation_id: string;
-  response: string;
-  timestamp: number;
+  message: string;
+  timestamp?: number;
+  usage?: any;
+  model?: string;
 }
 
 export interface ConversationsResponse {

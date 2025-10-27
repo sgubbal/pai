@@ -209,7 +209,7 @@ export const App: React.FC = () => {
       const assistantMessage: Message = {
         id: uuidv4(),
         role: 'assistant',
-        content: response.response,
+        content: response.message,
         timestamp: response.timestamp || Date.now(),
       };
 
