@@ -41,7 +41,7 @@ export const MessageList: React.FC<MessageListProps> = ({
       onScroll={handleScroll}
       className="flex-1 overflow-y-auto p-4 custom-scrollbar"
     >
-      {messages.length === 0 && !isLoading ? (
+      {(!messages || messages.length === 0) && !isLoading ? (
         <div className="flex items-center justify-center h-full">
           <div className="text-center max-w-md">
             <div className="mb-4">
@@ -69,7 +69,7 @@ export const MessageList: React.FC<MessageListProps> = ({
         </div>
       ) : (
         <>
-          {messages.map((message) => (
+          {messages && messages.map((message) => (
             <Message key={message.id} message={message} />
           ))}
           {isLoading && <TypingIndicator />}

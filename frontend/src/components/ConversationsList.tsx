@@ -61,7 +61,9 @@ export const ConversationsList: React.FC<ConversationsListProps> = ({
           <div className="p-2 space-y-1">
             {sortedConversations.map((conversation) => {
               const isActive = conversation.id === currentConversationId;
-              const lastMessage = conversation.messages[conversation.messages.length - 1];
+              const lastMessage = conversation.messages && conversation.messages.length > 0
+                ? conversation.messages[conversation.messages.length - 1]
+                : undefined;
 
               return (
                 <div

@@ -42,7 +42,7 @@ export function formatFullDateTime(timestamp: number): string {
  * Generate conversation title from first message
  */
 export function generateConversationTitle(messages: Message[]): string {
-  if (messages.length === 0) return 'New Conversation';
+  if (!messages || messages.length === 0) return 'New Conversation';
 
   const firstUserMessage = messages.find(m => m.role === 'user');
   if (!firstUserMessage) return 'New Conversation';
