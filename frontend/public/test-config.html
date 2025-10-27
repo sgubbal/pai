@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PAI Config Test</title>
+    <style>
+        body {
+            font-family: monospace;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #00ff00;
+        }
+        .test {
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #333;
+            border-radius: 4px;
+        }
+        .pass { background: #004400; border-color: #00ff00; }
+        .fail { background: #440000; border-color: #ff0000; color: #ff6666; }
+        button {
+            background: #00ff00;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            cursor: pointer;
+            margin: 10px 0;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        button:hover { background: #00cc00; }
+        #response {
+            white-space: pre-wrap;
+            background: #000;
+            padding: 10px;
+            margin-top: 10px;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔍 PAI Configuration Diagnostics</h1>
+
+    <div id="results">
+        <h2>Loading tests...</h2>
+    </div>
+
+    <button onclick="testAPI()">Test API Connection</button>
+    <div id="response"></div>
+
+    <script type="module">
+        // Import the config
+        import { config, validateConfig } from '/src/config.ts';
+
+        const results = document.getElementById('results');
+        const tests = [];
+
+        // Test 1: Check if config is defined
+        tests.push({
+            name: 'Config module loaded',
+            pass: typeof config !== 'undefined',
+            value: 'config object exists'
+        });
+
+        // Test 2: Check API URL
+        tests.push({
+            name: 'VITE_API_URL is set',
+            pass: !!config.apiUrl && config.apiUrl.length > 0,
+            value: config.apiUrl || '❌ NOT SET'
+        });
+
+        // Test 3: Check API Key
+        tests.push({
+            name: 'VITE_API_KEY is set',
+            pass: !!config.apiKey && config.apiKey.length > 0,
+            value: config.apiKey ? `${config.apiKey.substring(0, 10)}...` : '❌ NOT SET'
+        });
+
+        // Test 4: Validate config
+        const validation = validateConfig();
+        tests.push({
+            name: 'Config validation',
+            pass: validation.valid,
+            value: validation.valid ? 'All valid ✅' : validation.errors.join(', ')
+        });
+
+        // Test 5: Check environment
+        tests.push({
+            name: 'Build environment',
+            pass: true,
+            value: import.meta.env.MODE
+        });
+
+        // Display results
+        results.innerHTML = '<h2>Configuration Tests</h2>';
+        tests.forEach((test, i) => {
+            const div = document.createElement('div');
+            div.className = `test ${test.pass ? 'pass' : 'fail'}`;
+            div.innerHTML = `
+                <strong>${i + 1}. ${test.name}</strong>: ${test.pass ? '✅ PASS' : '❌ FAIL'}<br>
+                <small>Value: ${test.value}</small>
+            `;
+            results.appendChild(div);
+        });
+
+        // Make testAPI available globally
+        window.testAPI = async function() {
+            const responseDiv = document.getElementById('response');
+            responseDiv.textContent = 'Testing API connection...\n';
+
+            try {
+                const response = await fetch(`${config.apiUrl}/chat`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${config.apiKey}`
+                    },
+                    body: JSON.stringify({
+                        message: 'Test from config diagnostic page',
+                        user_id: 'test-user'
+                    })
+                });
+
+                responseDiv.textContent += `Status: ${response.status} ${response.statusText}\n\n`;
+
+                const data = await response.json();
+                responseDiv.textContent += 'Response:\n' + JSON.stringify(data, null, 2);
+
+                if (response.ok) {
+                    responseDiv.style.color = '#00ff00';
+                    responseDiv.textContent += '\n\n✅ API CONNECTION SUCCESSFUL!';
+                } else {
+                    responseDiv.style.color = '#ff6666';
+                    responseDiv.textContent += '\n\n❌ API ERROR';
+                }
+            } catch (error) {
+                responseDiv.style.color = '#ff6666';
+                responseDiv.textContent += `\n\n❌ ERROR: ${error.message}`;
+            }
+        };
+    </script>
+</body>
+</html>
