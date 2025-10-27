@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PAI Config Test</title>
+    <style>
+        body {
+            font-family: 'Courier New', monospace;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #00ff00;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        h1 { color: #00ff00; }
+        .test {
+            margin: 15px 0;
+            padding: 15px;
+            border: 2px solid #333;
+            border-radius: 8px;
+            background: #0a0a0a;
+        }
+        .pass { border-color: #00ff00; }
+        .fail { border-color: #ff0000; color: #ff6666; }
+        button {
+            background: #00ff00;
+            color: #000;
+            border: none;
+            padding: 12px 24px;
+            cursor: pointer;
+            margin: 10px 5px;
+            border-radius: 4px;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        button:hover { background: #00cc00; }
+        #response {
+            white-space: pre-wrap;
+            background: #000;
+            padding: 15px;
+            margin-top: 10px;
+            border-radius: 4px;
+            border: 1px solid #333;
+            overflow-x: auto;
+        }
+        .info { color: #ffff00; }
+    </style>
+</head>
+<body>
+    <h1>🔍 PAI Backend Connection Test</h1>
+
+    <div class="info">
+        This page tests if your frontend can communicate with the backend API.
+    </div>
+
+    <h2>Test Configuration:</h2>
+    <div class="test">
+        <strong>API Endpoint:</strong><br>
+        <code id="apiUrl">https://nomx0ee0vf.execute-api.us-east-1.amazonaws.com/prod</code>
+    </div>
+
+    <h2>Tests:</h2>
+    <button onclick="testCORS()">1. Test CORS (OPTIONS)</button>
+    <button onclick="testAPI()">2. Test API Connection (POST)</button>
+    <button onclick="testAuth()">3. Test with Auth</button>
+
+    <div id="response"></div>
+
+    <script>
+        const API_URL = 'https://nomx0ee0vf.execute-api.us-east-1.amazonaws.com/prod';
+        const API_KEY = '1zruxXU50nQcIiryr0hb4SM8fGbSgLOAdcBwnpUoAHY=';
+
+        function log(message, isError = false) {
+            const responseDiv = document.getElementById('response');
+            responseDiv.style.color = isError ? '#ff6666' : '#00ff00';
+            responseDiv.textContent += message + '\n';
+        }
+
+        function clearLog() {
+            document.getElementById('response').textContent = '';
+        }
+
+        async function testCORS() {
+            clearLog();
+            log('🔍 Testing CORS preflight (OPTIONS request)...\n');
+
+            try {
+                const response = await fetch(`${API_URL}/chat`, {
+                    method: 'OPTIONS',
+                    headers: {
+                        'Origin': window.location.origin,
+                        'Access-Control-Request-Method': 'POST',
+                        'Access-Control-Request-Headers': 'content-type,authorization'
+                    }
+                });
+
+                log(`Status: ${response.status} ${response.statusText}`);
+
+                const corsHeaders = {
+                    'Access-Control-Allow-Origin': response.headers.get('Access-Control-Allow-Origin'),
+                    'Access-Control-Allow-Methods': response.headers.get('Access-Control-Allow-Methods'),
+                    'Access-Control-Allow-Headers': response.headers.get('Access-Control-Allow-Headers')
+                };
+
+                log('\nCORS Headers:');
+                log(JSON.stringify(corsHeaders, null, 2));
+
+                if (response.status === 200 && corsHeaders['Access-Control-Allow-Origin']) {
+                    log('\n✅ CORS is properly configured!');
+                } else {
+                    log('\n❌ CORS configuration issue detected', true);
+                }
+            } catch (error) {
+                log(`\n❌ ERROR: ${error.message}`, true);
+            }
+        }
+
+        async function testAPI() {
+            clearLog();
+            log('🔍 Testing API connection (without auth)...\n');
+
+            try {
+                const response = await fetch(`${API_URL}/chat`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        message: 'Test message',
+                        user_id: 'test-user'
+                    })
+                });
+
+                log(`Status: ${response.status} ${response.statusText}`);
+
+                const data = await response.json();
+                log('\nResponse:');
+                log(JSON.stringify(data, null, 2));
+
+                if (response.status === 401 || response.status === 403) {
+                    log('\n✅ API is reachable (auth required as expected)');
+                } else if (response.ok) {
+                    log('\n✅ API connection successful!');
+                } else {
+                    log('\n⚠️ Unexpected response', true);
+                }
+            } catch (error) {
+                log(`\n❌ ERROR: ${error.message}`, true);
+                log('This usually means CORS is blocking the request', true);
+            }
+        }
+
+        async function testAuth() {
+            clearLog();
+            log('🔍 Testing API with authentication...\n');
+            log(`Using API Key: ${API_KEY.substring(0, 15)}...\n`);
+
+            try {
+                const response = await fetch(`${API_URL}/chat`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${API_KEY}`
+                    },
+                    body: JSON.stringify({
+                        message: 'Hello from test page',
+                        user_id: 'test-user'
+                    })
+                });
+
+                log(`Status: ${response.status} ${response.statusText}\n`);
+
+                const data = await response.json();
+                log('Response:');
+                log(JSON.stringify(data, null, 2));
+
+                if (response.ok) {
+                    log('\n✅ FULL API TEST SUCCESSFUL!');
+                    log('Your backend is working correctly.');
+                } else {
+                    log(`\n❌ API Error: ${response.status}`, true);
+                }
+            } catch (error) {
+                log(`\n❌ ERROR: ${error.message}`, true);
+            }
+        }
+
+        // Auto-run first test on load
+        window.addEventListener('load', () => {
+            setTimeout(testCORS, 500);
+        });
+    </script>
+</body>
+</html>
